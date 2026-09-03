@@ -23,13 +23,17 @@ uv run alembic upgrade head
 4. 启动服务：
 
 ```powershell
-uv run uvicorn huaye_window_ai.main:app --reload --host 127.0.0.1 --port 8000
+uv run python src\huaye_window_ai\main.py
 ```
 
 也可以在 PyCharm 中直接运行 `src/huaye_window_ai/main.py`；该入口会读取 `.env` 中的
 `APP_HOST`、`APP_PORT` 和 `APP_LOG_LEVEL`。IDE 直接运行模式不启用自动重载，便于调试器在同一进程中命中断点。
 
 开发环境可访问 `http://127.0.0.1:8000/docs`。探针为 `/health/live` 与 `/health/ready`。
+完整环境变量和日志说明见 [配置与日志](docs/configuration.md)。
+
+启动后控制台会显示应用版本、运行环境、Python 版本、MySQL/Redis 检查结果、应用与 Swagger 访问地址。
+运行日志同时写入 `logs/application.log`，警告与错误另写入 `logs/error.log`；两类文件均支持按大小滚动和保留数量配置。
 
 本机已有 MySQL/Redis 时直接使用 `3306/6379`。若改用 Compose，容器暴露到宿主机的端口为 `13306/16379`，避免冲突：
 

@@ -9,10 +9,17 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 
-def create_engine(database_url: str) -> AsyncEngine:
+def create_engine(database_url: str, *, echo: bool = False) -> AsyncEngine:
     """连接建立时固定 UTC，避免服务器本地时区改变业务时间含义。"""
 
-    engine = create_async_engine(database_url, pool_pre_ping=True, pool_recycle=1800)
+    # 即使临时开启 SQL echo，也不输出手机号等绑定参数值。
+    engine = create_async_engine(
+        database_url,
+        echo=echo,
+        hide_parameters=True,
+        pool_pre_ping=True,
+        pool_recycle=1800,
+    )
 
     @event.listens_for(engine.sync_engine, "connect")
     def set_mysql_session_time_zone(dbapi_connection: object, _connection_record: object) -> None:

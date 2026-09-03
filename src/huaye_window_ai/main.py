@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-import os
+import platform
+import socket
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -28,6 +29,7 @@ from huaye_window_ai.services.rate_limit import LoginRateLimiter
 from huaye_window_ai.services.session import SessionStore
 
 logger = logging.getLogger(__name__)
+_ALL_INTERFACES_HOST = "0.0.0.0"  # noqa: S104 - 仅用于识别用户明确配置的监听范围。
 
 
 def _request_id(request: Request) -> str:
@@ -38,15 +40,77 @@ def _error_payload(code: str, message: str, request_id: str, data: Any = None) -
     return {"code": code, "message": message, "data": data, "requestId": request_id}
 
 
+def _access_urls(config: Settings, path: str = "") -> list[str]:
+    """生成本机和局域网访问地址，方便开发者工具与真机联调。"""
+
+    if config.app_host != _ALL_INTERFACES_HOST:
+        return [f"http://{config.app_host}:{config.app_port}{path}"]
+    hosts = {"127.0.0.1"}
+    try:
+        hosts.update(
+            str(item[4][0])
+            for item in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET)
+            if item[4][0] != _ALL_INTERFACES_HOST
+        )
+    except OSError:
+        # 主机名解析失败不应阻止服务启动，本机地址仍可用于健康检查。
+        pass
+    return [f"http://{host}:{config.app_port}{path}" for host in sorted(hosts)]
+
+
+async def _check_dependencies(app: FastAPI, request_id: str) -> dict[str, bool]:
+    """独立检查 MySQL 和 Redis，并记录不包含连接密钥的失败摘要。"""
+
+    checks = {"mysql": False, "redis": False}
+    try:
+        async with app.state.engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+        checks["mysql"] = True
+    except Exception as exc:
+        logger.warning(
+            "依赖检查失败",
+            extra={
+                "request_id": request_id,
+                "fields": {"dependency": "mysql", "exceptionType": type(exc).__name__},
+            },
+        )
+    try:
+        checks["redis"] = bool(await app.state.redis.ping())
+    except Exception as exc:
+        logger.warning(
+            "依赖检查失败",
+            extra={
+                "request_id": request_id,
+                "fields": {"dependency": "redis", "exceptionType": type(exc).__name__},
+            },
+        )
+    return checks
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     """允许测试注入配置，生产入口仍只从环境变量读取。"""
 
+    config = settings or get_settings()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        config = settings or get_settings()
-        configure_logging(config.app_log_level)
-        engine = create_engine(config.database_url)
-        redis = Redis.from_url(config.redis_url, decode_responses=False)
+        configure_logging(config)
+        logger.info(
+            "应用开始启动",
+            extra={
+                "request_id": "startup",
+                "fields": {
+                    "appName": config.app_name,
+                    "version": config.app_version,
+                    "environment": config.app_env,
+                    "python": platform.python_version(),
+                    "host": config.app_host,
+                    "port": config.app_port,
+                },
+            },
+        )
+        engine = create_engine(config.resolved_database_url, echo=config.db_echo)
+        redis = Redis.from_url(config.resolved_redis_url, decode_responses=False)
         http = httpx.AsyncClient(timeout=config.wechat_http_timeout_seconds)
         session_store = SessionStore(redis, config.session_ttl_seconds)
         wechat = WechatClient(
@@ -73,22 +137,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app_id=config.wechat_app_id,
         )
         try:
+            checks: dict[str, bool] | str = "skipped"
+            if config.app_startup_checks_enabled:
+                checks = await _check_dependencies(app, "startup")
+            dependencies_ready = isinstance(checks, str) or all(checks.values())
+            startup_logger = logger.info if dependencies_ready else logger.warning
+            startup_logger(
+                "应用启动成功" if dependencies_ready else "应用已启动，但依赖检查未通过",
+                extra={
+                    "request_id": "startup",
+                    "fields": {
+                        "dependencies": checks,
+                        "applicationUrls": _access_urls(config),
+                        "docsUrls": _access_urls(config, "/docs") if config.app_docs_enabled else [],
+                        "logDirectory": str(config.log_directory) if config.log_file_enabled else "disabled",
+                    },
+                },
+            )
             yield
         finally:
+            logger.info("应用开始关闭", extra={"request_id": "shutdown"})
             await http.aclose()
             await redis.aclose()
             await engine.dispose()
+            logger.info("应用已关闭", extra={"request_id": "shutdown"})
 
-    configured = settings
-    docs_enabled = (
-        configured.app_docs_enabled
-        if configured
-        else os.getenv("APP_DOCS_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
-    )
     app = FastAPI(
-        title="华业门窗 AI 小程序后端",
-        version="0.1.0",
-        docs_url="/docs" if docs_enabled else None,
+        title=config.app_name,
+        version=config.app_version,
+        docs_url="/docs" if config.app_docs_enabled else None,
         redoc_url=None,
         lifespan=lifespan,
     )
@@ -131,24 +208,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health/ready", tags=["健康检查"])
     async def ready(request: Request) -> JSONResponse:
-        checks = {"mysql": False, "redis": False}
-        try:
-            async with request.app.state.engine.connect() as connection:
-                await connection.execute(text("SELECT 1"))
-            checks["mysql"] = True
-        except Exception:
-            logger.warning(
-                "readiness dependency check failed",
-                extra={"request_id": _request_id(request), "fields": {"dependency": "mysql"}},
-            )
-        try:
-            checks["redis"] = bool(await request.app.state.redis.ping())
-        except Exception:
-            # 各依赖必须独立检查，避免 MySQL 失败时错误地把健康 Redis 也标记为失败。
-            logger.warning(
-                "readiness dependency check failed",
-                extra={"request_id": _request_id(request), "fields": {"dependency": "redis"}},
-            )
+        checks = await _check_dependencies(request.app, _request_id(request))
         status_code = 200 if all(checks.values()) else 503
         return JSONResponse(
             status_code=status_code,
@@ -169,12 +229,15 @@ def main() -> None:
     """供 PyCharm 等 IDE 直接运行本文件时启动开发服务器。"""
 
     config = get_settings()
+    configure_logging(config)
     # 直接传入应用对象，避免 Uvicorn 再次导入模块；PyCharm 调试断点也能落在当前进程中。
     uvicorn.run(
         app,
         host=config.app_host,
         port=config.app_port,
         log_level=config.app_log_level.lower(),
+        access_log=False,
+        log_config=None,
     )
 
 
