@@ -71,8 +71,8 @@ def test_intercepts_logging_and_writes_dated_json_files(tmp_path: Path) -> None:
     assert len(error_files) == 1
 
     payload = json.loads(error_files[0].read_text(encoding="utf-8"))
-    assert payload["request_id"] == "req_test123"
-    assert payload["extra"]["fields"] == {"token": "[REDACTED]", "statusCode": 503}
+    assert payload["requestId"] == "req_test123"
+    assert payload["context"] == {"token": "[REDACTED]", "statusCode": 503}
     assert payload["message"] == "runtime warning"
 
 
@@ -91,8 +91,8 @@ def test_info_and_warning_are_split_into_different_files(tmp_path: Path) -> None
     assert "request failed" in error_text
 
 
-def test_plain_console_matches_ruoyi_column_order(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
-    """防止再次加入固定宽度环境列或在消息末尾拼接字段 JSON。"""
+def test_plain_console_is_compact_and_hides_info_source(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    """控制台 INFO 只显示短 requestId 和消息，不再堆叠链路与代码位置。"""
 
     output = StringIO()
     monkeypatch.setattr(logging_module.sys, "stdout", output)
@@ -101,13 +101,12 @@ def test_plain_console_matches_ruoyi_column_order(monkeypatch: MonkeyPatch, tmp_
     )
     configure_logging(settings)
     try:
-        with logger.contextualize(trace_id="trace-1", span_id="span-1", request_id="request-1"):
+        with logger.contextualize(request_id="request-1"):
             logger.bind(fields={"statusCode": 200}).info("console message")
     finally:
         shutdown_logging()
 
     rendered = output.getvalue()
-    assert " | trace-1 | span-1 | request-1 | " in rendered
-    assert " | INFO     | " in rendered
-    assert rendered.endswith(" - console message\n")
+    assert " | INFO     | request-1 | console message\n" in rendered
+    assert "test_plain_console" not in rendered
     assert '"statusCode"' not in rendered

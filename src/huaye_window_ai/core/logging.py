@@ -20,16 +20,12 @@ if TYPE_CHECKING:
 
     from huaye_window_ai.core.config import Settings
 
-# 与 RuoYi-Vue3-FastAPI 当前 _plain_log_formatter 保持相同的字段、顺序、颜色和分隔符。
-# 不设置固定列宽，避免短标识被填充出截图中那种大段空白。
+# 当前项目是单体服务，控制台优先保证一眼可读；完整 requestId 仍写入 JSON 文件并返回客户端。
 PLAIN_FORMAT = (
     "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-    "<cyan>{extra[trace_id]}</cyan> | "
-    "<magenta>{extra[span_id]}</magenta> | "
-    "<yellow>{extra[request_id]}</yellow> | "
-    "<blue>{extra[worker_id]}</blue> | "
     "<level>{level: <8}</level> | "
-    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+    "<yellow>{extra[request_id_short]}</yellow> | "
+    "<cyan>{extra[source]}</cyan>"
     "<level>{message}</level>{extra[sanitized_exception]}\n"
 )
 
@@ -96,11 +92,15 @@ def _patch_record(record: Record, *, service: str, environment: str, instance_id
     extra.setdefault("environment", environment)
     extra.setdefault("instance_id", instance_id)
     extra.setdefault("worker_id", str(os.getpid()))
-    extra.setdefault("trace_id", "-")
-    extra.setdefault("span_id", "-")
     extra.setdefault("request_id", "-")
     extra.setdefault("method", "-")
     extra.setdefault("path", "-")
+    request_id = str(extra["request_id"])
+    extra["request_id_short"] = request_id if len(request_id) <= 12 else f"{request_id[:12]}…"
+    # INFO 关注业务事件；只有 WARNING/ERROR 才显示代码位置，兼顾简洁和排障能力。
+    extra["source"] = (
+        f"{record['name']}:{record['function']}:{record['line']} - " if record["level"].no >= logging.WARNING else ""
+    )
 
     fields = extra.get("fields")
     sanitized_fields = redact(fields) if fields else None
@@ -132,33 +132,31 @@ def _plain_log_formatter(record: Record) -> str:
 
 
 def _json_log_formatter(record: Record) -> str:
-    """生成若依同款扁平 JSON，而不是 Loguru 默认的 record/text 双层封装。"""
+    """生成适合本地检索的精简 JSON，普通访问与错误日志按需保留不同字段。"""
 
     extra = record["extra"]
-    payload = {
+    payload: dict[str, Any] = {
         "timestamp": record["time"].isoformat(),
         "level": record["level"].name,
         "message": record["message"],
-        "logger": record["name"],
-        "trace_id": extra.get("trace_id"),
-        "request_id": extra.get("request_id"),
-        "span_id": extra.get("span_id"),
-        "worker_id": extra.get("worker_id"),
-        "instance_id": extra.get("instance_id"),
-        "service": extra.get("service"),
-        "environment": extra.get("environment"),
-        "method": extra.get("method"),
-        "path": extra.get("path"),
-        "module": record["module"],
-        "function": record["function"],
-        "line": record["line"],
-        "exception": extra.get("exception"),
-        "extra": {
-            key: value
-            for key, value in extra.items()
-            if key not in {"sanitized_exception", "exception", "json_payload"}
-        },
     }
+    request_id = extra.get("request_id")
+    if request_id and request_id != "-":
+        payload["requestId"] = request_id
+
+    fields = extra.get("fields")
+    access_fields = {"method", "path", "statusCode", "durationMs"}
+    if isinstance(fields, Mapping) and access_fields.issubset(fields):
+        # 访问日志字段直接平铺，避免原先顶层字段与 extra 重复两遍。
+        payload.update({key: value for key, value in fields.items() if value is not None})
+    elif fields:
+        payload["context"] = fields
+
+    if record["level"].no >= logging.WARNING:
+        payload["source"] = f"{record['name']}:{record['function']}:{record['line']}"
+        if extra.get("exception"):
+            payload["exception"] = extra["exception"]
+
     extra["json_payload"] = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
     return "{extra[json_payload]}\n"
 

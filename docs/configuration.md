@@ -54,9 +54,13 @@ Redis 使用 `REDIS_HOST`、`REDIS_PORT`、`REDIS_USERNAME`、`REDIS_PASSWORD` �
 请求日志不会记录查询串、请求体、Bearer Token、微信临时码或手机号。结构化扩展字段中的敏感键会在写入前统一替换为
 `[REDACTED]`。
 
-`plain` 控制台格式与 RuoYi-Vue3-FastAPI 保持相同顺序：时间、`traceId`、`spanId`、`requestId`、
-`workerId`、日志级别、调用位置和消息。启动成功后，应用地址和 Swagger 地址采用带图标的多行展示，不再把配置对象
-作为 JSON 拼接在日志尾部。
+`plain` 控制台格式保留 RuoYi-Vue3-FastAPI 的颜色和启动摘要，但针对当前单体服务精简为时间、级别、短
+`requestId` 和消息；代码位置只在 `WARNING` 及以上级别显示。JSON 文件保存完整 `requestId`，访问字段只存一份，
+不再重复写入 `extra`。失败请求还会记录业务错误码和安全的错误原因，例如
+`WECHAT_CODE_INVALID | 微信登录凭证已失效，请重试`。
+
+`/docs`、`/openapi.json` 和 `/health/live` 的成功访问默认不记录；失败访问仍正常记录。启动成功后，应用地址和
+Swagger 地址采用带图标的多行展示。
 
 ## 启动时应看到的信息
 

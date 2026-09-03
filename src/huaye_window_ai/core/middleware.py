@@ -12,6 +12,7 @@ from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+QUIET_SUCCESS_PATHS = frozenset({"/docs", "/openapi.json", "/health/live"})
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
@@ -24,14 +25,10 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         supplied = request.headers.get("X-Request-Id", "")
         request_id = supplied if REQUEST_ID_PATTERN.fullmatch(supplied) else f"req_{uuid.uuid4().hex}"
-        trace_id = uuid.uuid4().hex
-        span_id = uuid.uuid4().hex[:16]
         request.state.request_id = request_id
         started_at = time.perf_counter()
-        # 与若依的 TraceCtx 语义对齐，同时依靠 contextvars 隔离并发请求。
+        # 当前是单体服务，只保留能贯穿响应和日志的 requestId；trace/span 等到拆分服务后再启用。
         with logger.contextualize(
-            trace_id=trace_id,
-            span_id=span_id,
             request_id=request_id,
             method=request.method,
             path=request.url.path,
@@ -48,8 +45,16 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             settings = getattr(request.app.state, "settings", None)
             if settings is None or settings.log_access_enabled:
                 duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+                # 文档与存活探针的成功访问没有排障价值；失败时仍会完整记录。
+                if response.status_code < 400 and request.url.path in QUIET_SUCCESS_PATHS:
+                    return response
                 status_color = (
                     "green" if response.status_code < 400 else "yellow" if response.status_code < 500 else "red"
+                )
+                error_code = getattr(request.state, "access_error_code", None)
+                error_message = getattr(request.state, "access_error_message", None)
+                reason_text = (
+                    f" | <yellow>{error_code}</yellow> | {error_message}" if error_code and error_message else ""
                 )
                 logger.bind(
                     fields={
@@ -57,9 +62,11 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
                         "path": request.url.path,
                         "statusCode": response.status_code,
                         "durationMs": duration_ms,
+                        "errorCode": error_code,
+                        "errorMessage": error_message,
                     }
                 ).opt(colors=True).info(
-                    f"📨 <cyan>{request.method}</cyan> <blue>{request.url.path}</blue> - "
-                    f"<{status_color}>{response.status_code}</{status_color}> - {duration_ms:.2f} ms"
+                    f"📨 <cyan>{request.method}</cyan> <blue>{request.url.path}</blue> | "
+                    f"<{status_color}>{response.status_code}</{status_color}>{reason_text} | {duration_ms:.2f} ms"
                 )
             return response

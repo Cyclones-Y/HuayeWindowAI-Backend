@@ -38,6 +38,13 @@ def _error_payload(code: str, message: str, request_id: str, data: Any = None) -
     return {"code": code, "message": message, "data": data, "requestId": request_id}
 
 
+def _set_access_error(request: Request, code: str, message: str) -> None:
+    """把已确认可公开的业务错误交给访问日志，避免中间件读取并缓存响应体。"""
+
+    request.state.access_error_code = code
+    request.state.access_error_message = message
+
+
 def _access_urls(config: Settings, path: str = "") -> list[str]:
     """生成本机和局域网访问地址，方便开发者工具与真机联调。"""
 
@@ -179,6 +186,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(AppError)
     async def handle_app_error(request: Request, exc: AppError) -> JSONResponse:
+        _set_access_error(request, exc.code, exc.message)
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_payload(exc.code, exc.message, _request_id(request), exc.data),
@@ -191,6 +199,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {"field": ".".join(str(part) for part in item["loc"] if part != "body"), "type": item["type"]}
             for item in exc.errors()
         ]
+        _set_access_error(request, "INVALID_ARGUMENT", "请求参数无效")
         return JSONResponse(
             status_code=400,
             content=_error_payload("INVALID_ARGUMENT", "请求参数无效", _request_id(request), {"fields": fields}),
@@ -198,6 +207,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+        _set_access_error(request, "INTERNAL_ERROR", "服务暂时不可用")
         logger.bind(request_id=_request_id(request), fields={"exceptionType": type(exc).__name__}).opt(
             exception=exc
         ).error("未处理的请求异常")
@@ -214,6 +224,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def ready(request: Request) -> JSONResponse:
         checks = await _check_dependencies(request.app, _request_id(request))
         status_code = 200 if all(checks.values()) else 503
+        if status_code != 200:
+            _set_access_error(request, "DEPENDENCY_UNAVAILABLE", "MySQL 或 Redis 连接不可用")
         return JSONResponse(
             status_code=status_code,
             content={
