@@ -26,6 +26,9 @@ uv run alembic upgrade head
 uv run uvicorn huaye_window_ai.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
+也可以在 PyCharm 中直接运行 `src/huaye_window_ai/main.py`；该入口会读取 `.env` 中的
+`APP_HOST`、`APP_PORT` 和 `APP_LOG_LEVEL`。IDE 直接运行模式不启用自动重载，便于调试器在同一进程中命中断点。
+
 开发环境可访问 `http://127.0.0.1:8000/docs`。探针为 `/health/live` 与 `/health/ready`。
 
 本机已有 MySQL/Redis 时直接使用 `3306/6379`。若改用 Compose，容器暴露到宿主机的端口为 `13306/16379`，避免冲突：

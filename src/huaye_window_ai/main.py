@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -162,3 +163,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
 app = create_app()
+
+
+def main() -> None:
+    """供 PyCharm 等 IDE 直接运行本文件时启动开发服务器。"""
+
+    config = get_settings()
+    # 直接传入应用对象，避免 Uvicorn 再次导入模块；PyCharm 调试断点也能落在当前进程中。
+    uvicorn.run(
+        app,
+        host=config.app_host,
+        port=config.app_port,
+        log_level=config.app_log_level.lower(),
+    )
+
+
+if __name__ == "__main__":
+    main()
