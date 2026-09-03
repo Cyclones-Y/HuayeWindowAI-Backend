@@ -8,7 +8,6 @@ Create Date: 2026-09-02
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from sqlalchemy.dialects import mysql
 
 from alembic import op
 
@@ -22,17 +21,13 @@ def upgrade() -> None:
     op.create_table(
         "users",
         sa.Column("id", sa.String(length=41), nullable=False),
-        sa.Column("phone_ciphertext", sa.LargeBinary(length=128), nullable=False),
-        sa.Column("phone_nonce", sa.LargeBinary(length=12), nullable=False),
-        # VARBINARY 可完整建立唯一索引；BLOB 在 MySQL 中需要索引前缀，会削弱这里的唯一性语义。
-        sa.Column("phone_hash", mysql.VARBINARY(length=32), nullable=False),
+        sa.Column("phone_number", sa.String(length=24), nullable=False),
         sa.Column("phone_country_code", sa.String(length=8), nullable=False),
-        sa.Column("phone_key_version", sa.SmallInteger(), nullable=False),
         sa.Column("status", sa.String(length=16), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_users")),
-        sa.UniqueConstraint("phone_hash", name=op.f("uq_users_phone_hash")),
+        sa.UniqueConstraint("phone_number", name=op.f("uq_users_phone_number")),
         mysql_charset="utf8mb4",
         mysql_collate="utf8mb4_0900_ai_ci",
     )

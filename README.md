@@ -11,7 +11,7 @@
 
 ## 本地启动
 
-1. 复制 `.env.example` 为 `.env`，填写本地 MySQL/Redis、微信 AppID/AppSecret，以及两组独立的 32 字节 Base64 密钥。不要提交 `.env`。
+1. 复制 `.env.example` 为 `.env`，填写本地 MySQL/Redis 和微信 AppID/AppSecret。不要提交 `.env`。
 2. 创建数据库和最小权限账号。数据库应使用 `utf8mb4`，应用连接的会话时区会固定为 UTC。
 3. 安装依赖并执行迁移：
 
@@ -38,7 +38,7 @@ docker compose up --build
 
 `POST /v1/auth/wechat/login` 接收 `wx.login` 的 `code`、持久化的 `deviceId`，以及首次登录时 `getPhoneNumber` 返回的 `phoneCode`。新身份未提供手机号授权时返回 `PHONE_AUTH_REQUIRED`；已绑定身份后仅用新的 `wx.login` code 即可静默登录。
 
-后端不会提供注册、密码或短信验证码接口。手机号使用 AES-256-GCM 加密存储，并使用独立 HMAC 值进行唯一检索；微信 `session_key` 不保存、不返回、不记录日志。
+后端不会提供注册、密码或短信验证码接口。手机号按用户要求直接存储在 MySQL 中，仅用于账号识别；日志和 Redis 不保存手机号，微信 `session_key` 不保存、不返回、不记录日志。
 
 ## 验证
 

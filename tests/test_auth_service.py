@@ -9,7 +9,6 @@ from fakeredis.aioredis import FakeRedis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from huaye_window_ai.core.errors import AccountBindingConflictError, PhoneAuthRequiredError
-from huaye_window_ai.core.security import PhoneProtector
 from huaye_window_ai.db.base import Base
 from huaye_window_ai.integrations.wechat import WechatIdentityData, WechatPhoneData
 from huaye_window_ai.schemas.auth import WechatLoginRequest
@@ -48,7 +47,6 @@ async def make_service() -> tuple[AuthService, async_sessionmaker[AsyncSession],
     service = AuthService(
         wechat,  # type: ignore[arg-type]
         SessionStore(redis, 7200),
-        PhoneProtector(b"e" * 32, b"h" * 32, 1),
         app_id="wx_test",
     )
     return service, factory, redis

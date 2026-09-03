@@ -4,14 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, LargeBinary, SmallInteger, String, UniqueConstraint
-from sqlalchemy.dialects import mysql
+from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from huaye_window_ai.db.base import Base
-
-# MySQL 的 BLOB 不能直接建立无前缀唯一索引；测试用 SQLite 则继续使用通用 LargeBinary。
-PHONE_HASH_TYPE = LargeBinary(32).with_variant(mysql.VARBINARY(32), "mysql")
 
 
 def utc_now() -> datetime:
@@ -24,11 +20,8 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(41), primary_key=True)
-    phone_ciphertext: Mapped[bytes] = mapped_column(LargeBinary(128), nullable=False)
-    phone_nonce: Mapped[bytes] = mapped_column(LargeBinary(12), nullable=False)
-    phone_hash: Mapped[bytes] = mapped_column(PHONE_HASH_TYPE, nullable=False, unique=True)
+    phone_number: Mapped[str] = mapped_column(String(24), nullable=False, unique=True)
     phone_country_code: Mapped[str] = mapped_column(String(8), nullable=False)
-    phone_key_version: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(

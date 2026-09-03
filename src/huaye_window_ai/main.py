@@ -20,7 +20,6 @@ from huaye_window_ai.core.config import Settings, get_settings
 from huaye_window_ai.core.errors import AppError
 from huaye_window_ai.core.logging import configure_logging
 from huaye_window_ai.core.middleware import RequestIdMiddleware
-from huaye_window_ai.core.security import PhoneProtector
 from huaye_window_ai.db.session import create_engine, create_session_factory
 from huaye_window_ai.integrations.wechat import WechatClient
 from huaye_window_ai.services.auth import AuthService
@@ -70,11 +69,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.auth_service = AuthService(
             wechat,
             session_store,
-            PhoneProtector(
-                config.phone_encryption_key,
-                config.phone_lookup_hmac_key,
-                config.phone_key_version,
-            ),
             app_id=config.wechat_app_id,
         )
         try:
@@ -141,9 +135,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             async with request.app.state.engine.connect() as connection:
                 await connection.execute(text("SELECT 1"))
             checks["mysql"] = True
+        except Exception:
+            logger.warning(
+                "readiness dependency check failed",
+                extra={"request_id": _request_id(request), "fields": {"dependency": "mysql"}},
+            )
+        try:
             checks["redis"] = bool(await request.app.state.redis.ping())
         except Exception:
-            logger.warning("readiness dependency check failed", extra={"request_id": _request_id(request)})
+            # 各依赖必须独立检查，避免 MySQL 失败时错误地把健康 Redis 也标记为失败。
+            logger.warning(
+                "readiness dependency check failed",
+                extra={"request_id": _request_id(request), "fields": {"dependency": "redis"}},
+            )
         status_code = 200 if all(checks.values()) else 503
         return JSONResponse(
             status_code=status_code,
