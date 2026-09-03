@@ -54,6 +54,10 @@ Redis 使用 `REDIS_HOST`、`REDIS_PORT`、`REDIS_USERNAME`、`REDIS_PASSWORD` �
 请求日志不会记录查询串、请求体、Bearer Token、微信临时码或手机号。结构化扩展字段中的敏感键会在写入前统一替换为
 `[REDACTED]`。
 
+`plain` 控制台格式与 RuoYi-Vue3-FastAPI 保持相同顺序：时间、`traceId`、`spanId`、`requestId`、
+`workerId`、日志级别、调用位置和消息。启动成功后，应用地址和 Swagger 地址采用带图标的多行展示，不再把配置对象
+作为 JSON 拼接在日志尾部。
+
 ## 启动时应看到的信息
 
 直接运行 `src/huaye_window_ai/main.py` 后，控制台会依次显示：

@@ -20,21 +20,17 @@ if TYPE_CHECKING:
 
     from huaye_window_ai.core.config import Settings
 
-# 这套格式沿用 RuoYi-Vue3-FastAPI 的“时间 + 链路 + 进程 + 级别 + 调用位置”布局，
-# 同时把当前项目尚未使用的 trace/span 字段替换为环境，避免输出无意义占位列。
-CONSOLE_FORMAT = (
+# 与 RuoYi-Vue3-FastAPI 当前 _plain_log_formatter 保持相同的字段、顺序、颜色和分隔符。
+# 不设置固定列宽，避免短标识被填充出截图中那种大段空白。
+PLAIN_FORMAT = (
     "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-    "<cyan>{extra[environment]: <11}</cyan> | "
-    "<yellow>{extra[request_id]: <20}</yellow> | "
-    "<blue>{extra[worker_id]: <6}</blue> | "
+    "<cyan>{extra[trace_id]}</cyan> | "
+    "<magenta>{extra[span_id]}</magenta> | "
+    "<yellow>{extra[request_id]}</yellow> | "
+    "<blue>{extra[worker_id]}</blue> | "
     "<level>{level: <8}</level> | "
     "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
-    "<level>{message}</level>{extra[fields_text]}{extra[sanitized_exception]}\n"
-)
-FILE_FORMAT = (
-    "{time:YYYY-MM-DD HH:mm:ss.SSS} | {extra[environment]} | {extra[request_id]} | "
-    "{extra[worker_id]} | {level: <8} | {name}:{function}:{line} - "
-    "{message}{extra[fields_text]}{extra[sanitized_exception]}\n"
+    "<level>{message}</level>{extra[sanitized_exception]}\n"
 )
 
 SENSITIVE_KEYS = {
@@ -100,27 +96,71 @@ def _patch_record(record: Record, *, service: str, environment: str, instance_id
     extra.setdefault("environment", environment)
     extra.setdefault("instance_id", instance_id)
     extra.setdefault("worker_id", str(os.getpid()))
+    extra.setdefault("trace_id", "-")
+    extra.setdefault("span_id", "-")
     extra.setdefault("request_id", "-")
+    extra.setdefault("method", "-")
+    extra.setdefault("path", "-")
 
     fields = extra.get("fields")
     sanitized_fields = redact(fields) if fields else None
     extra["fields"] = sanitized_fields
-    extra["fields_text"] = (
-        f" | {json.dumps(sanitized_fields, ensure_ascii=False, separators=(',', ':'), default=str)}"
-        if sanitized_fields
-        else ""
-    )
     record["message"] = sanitize_text(record["message"])
 
     # Loguru 默认会在格式化后追加原始异常。这里先生成脱敏后的 traceback，再清空原异常，
     # 否则微信响应或数据库驱动异常中的连接信息可能绕开 message/fields 脱敏。
     exception = record["exception"]
     if exception is None:
+        extra["exception"] = None
         extra["sanitized_exception"] = ""
         return
     rendered = "".join(traceback.format_exception(exception.type, exception.value, exception.traceback))
-    extra["sanitized_exception"] = f"\n{sanitize_text(rendered).rstrip()}"
+    sanitized_traceback = sanitize_text(rendered).rstrip()
+    extra["exception"] = {
+        "type": exception.type.__name__ if exception.type else None,
+        "value": sanitize_text(exception.value) if exception.value else None,
+        "traceback": sanitized_traceback,
+    }
+    extra["sanitized_exception"] = f"\n{sanitized_traceback}"
     record["exception"] = None
+
+
+def _plain_log_formatter(record: Record) -> str:
+    """返回若依同款普通文本模板；异常文本已由 patcher 脱敏。"""
+
+    return PLAIN_FORMAT
+
+
+def _json_log_formatter(record: Record) -> str:
+    """生成若依同款扁平 JSON，而不是 Loguru 默认的 record/text 双层封装。"""
+
+    extra = record["extra"]
+    payload = {
+        "timestamp": record["time"].isoformat(),
+        "level": record["level"].name,
+        "message": record["message"],
+        "logger": record["name"],
+        "trace_id": extra.get("trace_id"),
+        "request_id": extra.get("request_id"),
+        "span_id": extra.get("span_id"),
+        "worker_id": extra.get("worker_id"),
+        "instance_id": extra.get("instance_id"),
+        "service": extra.get("service"),
+        "environment": extra.get("environment"),
+        "method": extra.get("method"),
+        "path": extra.get("path"),
+        "module": record["module"],
+        "function": record["function"],
+        "line": record["line"],
+        "exception": extra.get("exception"),
+        "extra": {
+            key: value
+            for key, value in extra.items()
+            if key not in {"sanitized_exception", "exception", "json_payload"}
+        },
+    }
+    extra["json_payload"] = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+    return "{extra[json_payload]}\n"
 
 
 class InterceptHandler(logging.Handler):
@@ -192,9 +232,7 @@ def configure_logging(config: Settings) -> None:
     if config.log_console_enabled:
         logger.add(
             sys.stdout,
-            format=CONSOLE_FORMAT,
-            colorize=config.log_console_format == "plain",
-            serialize=config.log_console_format == "json",
+            format=_plain_log_formatter if config.log_console_format == "plain" else _json_log_formatter,
             **common_options,
         )
 
@@ -203,9 +241,8 @@ def configure_logging(config: Settings) -> None:
         dated_directory = config.log_directory / "{time:YYYY}" / "{time:MM}" / "{time:DD}"
         file_options: dict[str, Any] = {
             **common_options,
-            "format": FILE_FORMAT,
+            "format": _plain_log_formatter if config.log_file_format == "plain" else _json_log_formatter,
             "encoding": "utf-8",
-            "serialize": config.log_file_format == "json",
             "rotation": config.log_rotation,
             "retention": config.log_retention,
             "compression": config.log_compression,

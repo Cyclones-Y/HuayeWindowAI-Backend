@@ -44,10 +44,12 @@ def test_access_log_contains_status_and_excludes_query(settings: object) -> None
             logger.remove(sink_id)
 
     assert response.status_code == 200
-    completed = next(record for record in records if record["message"] == "HTTP 请求完成")
+    completed = next(record for record in records if record["extra"].get("fields", {}).get("statusCode") == 200)
     assert completed["extra"]["fields"]["path"] == "/health/live"
     assert completed["extra"]["fields"]["statusCode"] == 200
     assert "temporary" not in str(completed["extra"]["fields"])
+    assert completed["extra"]["trace_id"] != "-"
+    assert completed["extra"]["span_id"] != "-"
 
 
 def test_main_starts_uvicorn_with_app_settings(monkeypatch: Any, settings: Any) -> None:

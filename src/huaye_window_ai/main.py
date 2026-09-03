@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import platform
 import socket
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -57,6 +56,24 @@ def _access_urls(config: Settings, path: str = "") -> list[str]:
     return [f"http://{host}:{config.app_port}{path}" for host in sorted(hosts)]
 
 
+def _log_address_group(title: str, urls: list[str]) -> None:
+    """采用若依的多行地址展示方式，避免 URL 被塞进难读的 JSON 数组。"""
+
+    if not urls:
+        return
+    lines = [f"🏠 Local:    <cyan>{urls[0]}</cyan>"]
+    lines.extend(f"📡 Network:  <cyan>{url}</cyan>" for url in urls[1:])
+    logger.opt(colors=True).info(f"{title}:\n" + "\n".join(lines))
+
+
+def _show_startup_addresses(config: Settings) -> None:
+    """集中显示应用和 Swagger 地址，与 RuoYi-Vue3-FastAPI 的启动摘要一致。"""
+
+    _log_address_group("💻 应用地址", _access_urls(config))
+    if config.app_docs_enabled:
+        _log_address_group("📄 Swagger文档", _access_urls(config, "/docs"))
+
+
 async def _check_dependencies(app: FastAPI, request_id: str) -> dict[str, bool]:
     """独立检查 MySQL 和 Redis，并记录不包含连接密钥的失败摘要。"""
 
@@ -69,14 +86,14 @@ async def _check_dependencies(app: FastAPI, request_id: str) -> dict[str, bool]:
         logger.bind(
             request_id=request_id,
             fields={"dependency": "mysql", "exceptionType": type(exc).__name__},
-        ).warning("依赖检查失败")
+        ).warning("MySQL 依赖检查失败")
     try:
         checks["redis"] = bool(await app.state.redis.ping())
     except Exception as exc:
         logger.bind(
             request_id=request_id,
             fields={"dependency": "redis", "exceptionType": type(exc).__name__},
-        ).warning("依赖检查失败")
+        ).warning("Redis 依赖检查失败")
     return checks
 
 
@@ -89,16 +106,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         configure_logging(config)
         logger.bind(
-            request_id="startup",
+            startup_phase="application_startup",
             fields={
                 "appName": config.app_name,
                 "version": config.app_version,
                 "environment": config.app_env,
-                "python": platform.python_version(),
                 "host": config.app_host,
                 "port": config.app_port,
             },
-        ).info("应用开始启动")
+        ).info(f"⏰️ {config.app_name}开始启动")
         engine = create_engine(config.resolved_database_url, echo=config.db_echo)
         redis = Redis.from_url(config.resolved_redis_url, decode_responses=False)
         http = httpx.AsyncClient(timeout=config.wechat_http_timeout_seconds)
@@ -131,25 +147,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if config.app_startup_checks_enabled:
                 checks = await _check_dependencies(app, "startup")
             dependencies_ready = isinstance(checks, str) or all(checks.values())
-            logger.bind(
-                request_id="startup",
-                fields={
-                    "dependencies": checks,
-                    "applicationUrls": _access_urls(config),
-                    "docsUrls": _access_urls(config, "/docs") if config.app_docs_enabled else [],
-                    "logDirectory": str(config.log_directory) if config.log_file_enabled else "disabled",
-                },
-            ).log(
-                "INFO" if dependencies_ready else "WARNING",
-                "应用启动成功" if dependencies_ready else "应用已启动，但依赖检查未通过",
-            )
+            startup_logger = logger.bind(startup_phase="application_startup", fields={"dependencies": checks})
+            if dependencies_ready:
+                startup_logger.info(f"🚀 {config.app_name}启动成功")
+            else:
+                startup_logger.warning(f"⚠️ {config.app_name}已启动，但依赖检查未通过")
+            _show_startup_addresses(config)
+            if config.log_file_enabled:
+                logger.opt(colors=True).info(f"📁 日志目录: <cyan>{config.log_directory}</cyan>")
+            # 所有 sink 都使用 enqueue=True，确保启动摘要在 Uvicorn 的完成提示前输出。
+            await logger.complete()
             yield
         finally:
-            logger.bind(request_id="shutdown").info("应用开始关闭")
+            logger.bind(shutdown_phase="application_shutdown").info(f"⏳ {config.app_name}开始关闭")
             await http.aclose()
             await redis.aclose()
             await engine.dispose()
-            logger.bind(request_id="shutdown").info("应用已关闭")
+            logger.bind(shutdown_phase="application_shutdown").info(f"👋 {config.app_name}已关闭")
             # 等待 Loguru 队列落盘，但保留 sink 供随后执行的 Uvicorn 退出日志使用。
             await logger.complete()
 
@@ -184,9 +198,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
-        logger.bind(request_id=_request_id(request), fields={"exceptionType": type(exc).__name__}).error(
-            "未处理的请求异常"
-        )
+        logger.bind(request_id=_request_id(request), fields={"exceptionType": type(exc).__name__}).opt(
+            exception=exc
+        ).error("未处理的请求异常")
         return JSONResponse(
             status_code=500,
             content=_error_payload("INTERNAL_ERROR", "服务暂时不可用", _request_id(request)),

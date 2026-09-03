@@ -2,10 +2,13 @@
 
 import json
 import logging
+from io import StringIO
 from pathlib import Path
 
 from loguru import logger
+from pytest import MonkeyPatch
 
+from huaye_window_ai.core import logging as logging_module
 from huaye_window_ai.core.config import Settings
 from huaye_window_ai.core.logging import configure_logging, redact, sanitize_text, shutdown_logging
 
@@ -68,9 +71,9 @@ def test_intercepts_logging_and_writes_dated_json_files(tmp_path: Path) -> None:
     assert len(error_files) == 1
 
     payload = json.loads(error_files[0].read_text(encoding="utf-8"))
-    assert payload["record"]["extra"]["request_id"] == "req_test123"
-    assert payload["record"]["extra"]["fields"] == {"token": "[REDACTED]", "statusCode": 503}
-    assert payload["record"]["message"] == "runtime warning"
+    assert payload["request_id"] == "req_test123"
+    assert payload["extra"]["fields"] == {"token": "[REDACTED]", "statusCode": 503}
+    assert payload["message"] == "runtime warning"
 
 
 def test_info_and_warning_are_split_into_different_files(tmp_path: Path) -> None:
@@ -86,3 +89,25 @@ def test_info_and_warning_are_split_into_different_files(tmp_path: Path) -> None
     assert "request completed" in info_text
     assert "request failed" not in info_text
     assert "request failed" in error_text
+
+
+def test_plain_console_matches_ruoyi_column_order(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    """防止再次加入固定宽度环境列或在消息末尾拼接字段 JSON。"""
+
+    output = StringIO()
+    monkeypatch.setattr(logging_module.sys, "stdout", output)
+    settings = _settings(tmp_path, file_format="plain").model_copy(
+        update={"log_console_enabled": True, "log_file_enabled": False}
+    )
+    configure_logging(settings)
+    try:
+        with logger.contextualize(trace_id="trace-1", span_id="span-1", request_id="request-1"):
+            logger.bind(fields={"statusCode": 200}).info("console message")
+    finally:
+        shutdown_logging()
+
+    rendered = output.getvalue()
+    assert " | trace-1 | span-1 | request-1 | " in rendered
+    assert " | INFO     | " in rendered
+    assert rendered.endswith(" - console message\n")
+    assert '"statusCode"' not in rendered

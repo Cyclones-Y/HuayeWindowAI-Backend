@@ -24,10 +24,18 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         supplied = request.headers.get("X-Request-Id", "")
         request_id = supplied if REQUEST_ID_PATTERN.fullmatch(supplied) else f"req_{uuid.uuid4().hex}"
+        trace_id = uuid.uuid4().hex
+        span_id = uuid.uuid4().hex[:16]
         request.state.request_id = request_id
         started_at = time.perf_counter()
-        # contextualize 使用 contextvars 隔离并发请求；请求内任意模块的日志都会自动携带 requestId。
-        with logger.contextualize(request_id=request_id):
+        # 与若依的 TraceCtx 语义对齐，同时依靠 contextvars 隔离并发请求。
+        with logger.contextualize(
+            trace_id=trace_id,
+            span_id=span_id,
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+        ):
             try:
                 response = await call_next(request)
             except Exception:
@@ -39,12 +47,19 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             response.headers["X-Request-Id"] = request_id
             settings = getattr(request.app.state, "settings", None)
             if settings is None or settings.log_access_enabled:
+                duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+                status_color = (
+                    "green" if response.status_code < 400 else "yellow" if response.status_code < 500 else "red"
+                )
                 logger.bind(
                     fields={
                         "method": request.method,
                         "path": request.url.path,
                         "statusCode": response.status_code,
-                        "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
+                        "durationMs": duration_ms,
                     }
-                ).info("HTTP 请求完成")
+                ).opt(colors=True).info(
+                    f"📨 <cyan>{request.method}</cyan> <blue>{request.url.path}</blue> - "
+                    f"<{status_color}>{response.status_code}</{status_color}> - {duration_ms:.2f} ms"
+                )
             return response
