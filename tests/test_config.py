@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
+from huaye_window_ai.core import config as config_module
 from huaye_window_ai.core.config import Settings
+
+
+def test_default_env_file_is_project_root() -> None:
+    """IDE 改变工作目录时仍需定位到仓库根目录下的 `.env`。"""
+
+    expected = Path(config_module.__file__).resolve().parents[3] / ".env"
+    assert Settings.model_config["env_file"] == expected
 
 
 def test_rejects_invalid_wechat_app_id() -> None:

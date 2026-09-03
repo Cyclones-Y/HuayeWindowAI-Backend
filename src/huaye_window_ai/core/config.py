@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# IDE 直接运行源码时，当前工作目录可能落在 src/huaye_window_ai；配置文件应始终从项目根目录读取。
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_ENV_FILE = _PROJECT_ROOT / ".env"
+
 
 class DatabaseSettings(BaseSettings):
     """Alembic 和应用共享的数据库最小配置。"""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 
     database_url: str = "mysql+asyncmy://huaye:replace_me@127.0.0.1:3306/huaye_window_ai?charset=utf8mb4"
 
