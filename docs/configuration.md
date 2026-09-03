@@ -40,14 +40,16 @@ Redis 使用 `REDIS_HOST`、`REDIS_PORT`、`REDIS_USERNAME`、`REDIS_PASSWORD` �
 | `LOG_FILE_ENABLED` | `true` | 写入滚动日志文件 |
 | `LOG_FILE_FORMAT` | `json` | 文件格式：`plain` 或 `json` |
 | `LOG_DIRECTORY` | `logs` | 日志目录，默认位于项目根目录 |
-| `LOG_MAX_BYTES` | `10485760` | 单个日志文件滚动阈值 |
-| `LOG_BACKUP_COUNT` | `14` | 每类日志保留的历史文件数 |
+| `LOG_ROTATION` | `50 MB` | 单个日志文件达到该大小后滚动 |
+| `LOG_RETENTION` | `30 days` | 滚动日志保留时间 |
+| `LOG_COMPRESSION` | `zip` | 历史日志压缩格式 |
+| `LOG_INSTANCE_ID` | `default` | 部署实例标识，供多实例日志区分 |
 | `LOG_ACCESS_ENABLED` | `true` | 是否记录请求方法、路径、状态码和耗时 |
 
 日志文件包括：
 
-- `logs/application.log`：应用、启动、请求和依赖检查等全部日志；
-- `logs/error.log`：`WARNING` 及以上日志，便于快速定位故障。
+- `logs/年/月/日/info.log`：应用、启动、请求和依赖检查等 `INFO` 日志；
+- `logs/年/月/日/error.log`：`WARNING` 及以上日志，便于快速定位故障。
 
 请求日志不会记录查询串、请求体、Bearer Token、微信临时码或手机号。结构化扩展字段中的敏感键会在写入前统一替换为
 `[REDACTED]`。
@@ -62,4 +64,4 @@ Redis 使用 `REDIS_HOST`、`REDIS_PORT`、`REDIS_USERNAME`、`REDIS_PASSWORD` �
 4. 日志落盘目录；
 5. 每次 HTTP 请求的 `requestId`、状态码和耗时。
 
-若端口已被占用，Uvicorn 错误也会同时写入控制台、`application.log` 和 `error.log`。
+若端口已被占用，Uvicorn 错误也会同时写入控制台和当天的 `error.log`。

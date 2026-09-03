@@ -1,11 +1,13 @@
-"""日志字段脱敏与滚动文件输出测试。"""
+"""Loguru 日志接管、脱敏和按日期落盘测试。"""
 
 import json
 import logging
 from pathlib import Path
 
+from loguru import logger
+
 from huaye_window_ai.core.config import Settings
-from huaye_window_ai.core.logging import configure_logging, redact, shutdown_logging
+from huaye_window_ai.core.logging import configure_logging, redact, sanitize_text, shutdown_logging
 
 
 def test_redacts_nested_credentials_and_phone() -> None:
@@ -21,20 +23,36 @@ def test_redacts_nested_credentials_and_phone() -> None:
     }
 
 
-def test_writes_json_application_and_error_logs(tmp_path: Path) -> None:
-    settings = Settings(
+def test_sanitizes_unstructured_credentials() -> None:
+    value = "request authorization=Bearer abc.def and app_secret='wechat-secret'"
+    sanitized = sanitize_text(value)
+    assert "abc.def" not in sanitized
+    assert "wechat-secret" not in sanitized
+    assert sanitized.count("[REDACTED]") == 2
+
+
+def _settings(tmp_path: Path, *, file_format: str = "json") -> Settings:
+    """构造不依赖真实 MySQL、Redis 和微信服务的日志配置。"""
+
+    return Settings(
         _env_file=None,
         app_env="test",
         database_url="sqlite+aiosqlite:///:memory:",
         redis_url="redis://unused/0",
         log_console_enabled=False,
         log_file_enabled=True,
+        log_file_format=file_format,
         log_directory=tmp_path,
+        log_compression="zip",
         wechat_app_id="wx_test",
         wechat_app_secret="secret",
     )
-    configure_logging(settings)
+
+
+def test_intercepts_logging_and_writes_dated_json_files(tmp_path: Path) -> None:
+    configure_logging(_settings(tmp_path))
     try:
+        # 标准 logging 代表 Uvicorn/FastAPI 等第三方库，验证它也经过同一套 Loguru sink。
         logging.getLogger("test.runtime").warning(
             "runtime warning",
             extra={"request_id": "req_test123", "fields": {"token": "secret-token", "statusCode": 503}},
@@ -42,8 +60,29 @@ def test_writes_json_application_and_error_logs(tmp_path: Path) -> None:
     finally:
         shutdown_logging()
 
-    application_payload = json.loads((tmp_path / "application.log").read_text(encoding="utf-8"))
-    error_payload = json.loads((tmp_path / "error.log").read_text(encoding="utf-8"))
-    assert application_payload["requestId"] == "req_test123"
-    assert application_payload["fields"] == {"token": "[REDACTED]", "statusCode": 503}
-    assert error_payload == application_payload
+    info_files = list(tmp_path.rglob("info.log"))
+    error_files = list(tmp_path.rglob("error.log"))
+    # Loguru 在注册 sink 时创建目标文件；WARNING 不会向 info.log 写入内容。
+    assert len(info_files) == 1
+    assert info_files[0].read_text(encoding="utf-8") == ""
+    assert len(error_files) == 1
+
+    payload = json.loads(error_files[0].read_text(encoding="utf-8"))
+    assert payload["record"]["extra"]["request_id"] == "req_test123"
+    assert payload["record"]["extra"]["fields"] == {"token": "[REDACTED]", "statusCode": 503}
+    assert payload["record"]["message"] == "runtime warning"
+
+
+def test_info_and_warning_are_split_into_different_files(tmp_path: Path) -> None:
+    configure_logging(_settings(tmp_path, file_format="plain"))
+    try:
+        logger.bind(request_id="req_info", fields={"statusCode": 200}).info("request completed")
+        logger.bind(request_id="req_error").error("request failed")
+    finally:
+        shutdown_logging()
+
+    info_text = next(tmp_path.rglob("info.log")).read_text(encoding="utf-8")
+    error_text = next(tmp_path.rglob("error.log")).read_text(encoding="utf-8")
+    assert "request completed" in info_text
+    assert "request failed" not in info_text
+    assert "request failed" in error_text

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import platform
 import socket
 from collections.abc import AsyncIterator
@@ -14,6 +13,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from loguru import logger
 from redis.asyncio import Redis
 from sqlalchemy import text
 
@@ -28,7 +28,6 @@ from huaye_window_ai.services.auth import AuthService
 from huaye_window_ai.services.rate_limit import LoginRateLimiter
 from huaye_window_ai.services.session import SessionStore
 
-logger = logging.getLogger(__name__)
 _ALL_INTERFACES_HOST = "0.0.0.0"  # noqa: S104 - 仅用于识别用户明确配置的监听范围。
 
 
@@ -67,23 +66,17 @@ async def _check_dependencies(app: FastAPI, request_id: str) -> dict[str, bool]:
             await connection.execute(text("SELECT 1"))
         checks["mysql"] = True
     except Exception as exc:
-        logger.warning(
-            "依赖检查失败",
-            extra={
-                "request_id": request_id,
-                "fields": {"dependency": "mysql", "exceptionType": type(exc).__name__},
-            },
-        )
+        logger.bind(
+            request_id=request_id,
+            fields={"dependency": "mysql", "exceptionType": type(exc).__name__},
+        ).warning("依赖检查失败")
     try:
         checks["redis"] = bool(await app.state.redis.ping())
     except Exception as exc:
-        logger.warning(
-            "依赖检查失败",
-            extra={
-                "request_id": request_id,
-                "fields": {"dependency": "redis", "exceptionType": type(exc).__name__},
-            },
-        )
+        logger.bind(
+            request_id=request_id,
+            fields={"dependency": "redis", "exceptionType": type(exc).__name__},
+        ).warning("依赖检查失败")
     return checks
 
 
@@ -95,20 +88,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         configure_logging(config)
-        logger.info(
-            "应用开始启动",
-            extra={
-                "request_id": "startup",
-                "fields": {
-                    "appName": config.app_name,
-                    "version": config.app_version,
-                    "environment": config.app_env,
-                    "python": platform.python_version(),
-                    "host": config.app_host,
-                    "port": config.app_port,
-                },
+        logger.bind(
+            request_id="startup",
+            fields={
+                "appName": config.app_name,
+                "version": config.app_version,
+                "environment": config.app_env,
+                "python": platform.python_version(),
+                "host": config.app_host,
+                "port": config.app_port,
             },
-        )
+        ).info("应用开始启动")
         engine = create_engine(config.resolved_database_url, echo=config.db_echo)
         redis = Redis.from_url(config.resolved_redis_url, decode_responses=False)
         http = httpx.AsyncClient(timeout=config.wechat_http_timeout_seconds)
@@ -141,26 +131,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if config.app_startup_checks_enabled:
                 checks = await _check_dependencies(app, "startup")
             dependencies_ready = isinstance(checks, str) or all(checks.values())
-            startup_logger = logger.info if dependencies_ready else logger.warning
-            startup_logger(
-                "应用启动成功" if dependencies_ready else "应用已启动，但依赖检查未通过",
-                extra={
-                    "request_id": "startup",
-                    "fields": {
-                        "dependencies": checks,
-                        "applicationUrls": _access_urls(config),
-                        "docsUrls": _access_urls(config, "/docs") if config.app_docs_enabled else [],
-                        "logDirectory": str(config.log_directory) if config.log_file_enabled else "disabled",
-                    },
+            logger.bind(
+                request_id="startup",
+                fields={
+                    "dependencies": checks,
+                    "applicationUrls": _access_urls(config),
+                    "docsUrls": _access_urls(config, "/docs") if config.app_docs_enabled else [],
+                    "logDirectory": str(config.log_directory) if config.log_file_enabled else "disabled",
                 },
+            ).log(
+                "INFO" if dependencies_ready else "WARNING",
+                "应用启动成功" if dependencies_ready else "应用已启动，但依赖检查未通过",
             )
             yield
         finally:
-            logger.info("应用开始关闭", extra={"request_id": "shutdown"})
+            logger.bind(request_id="shutdown").info("应用开始关闭")
             await http.aclose()
             await redis.aclose()
             await engine.dispose()
-            logger.info("应用已关闭", extra={"request_id": "shutdown"})
+            logger.bind(request_id="shutdown").info("应用已关闭")
+            # 等待 Loguru 队列落盘，但保留 sink 供随后执行的 Uvicorn 退出日志使用。
+            await logger.complete()
 
     app = FastAPI(
         title=config.app_name,
@@ -193,9 +184,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
-        logger.error(
-            "unhandled request error",
-            extra={"request_id": _request_id(request), "fields": {"exceptionType": type(exc).__name__}},
+        logger.bind(request_id=_request_id(request), fields={"exceptionType": type(exc).__name__}).error(
+            "未处理的请求异常"
         )
         return JSONResponse(
             status_code=500,

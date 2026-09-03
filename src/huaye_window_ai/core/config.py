@@ -84,8 +84,10 @@ class Settings(DatabaseSettings):
     log_file_enabled: bool = True
     log_file_format: Literal["plain", "json"] = "json"
     log_directory: Path = _PROJECT_ROOT / "logs"
-    log_max_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
-    log_backup_count: int = Field(default=14, ge=1, le=365)
+    log_rotation: str = "50 MB"
+    log_retention: str = "30 days"
+    log_compression: str = "zip"
+    log_instance_id: str = "default"
     log_access_enabled: bool = True
 
     wechat_app_id: str

@@ -1,9 +1,9 @@
 """HTTP 响应、参数错误、链路标识和本地启动入口测试。"""
 
-import logging
 from typing import Any
 
 from fastapi.testclient import TestClient
+from loguru import logger
 
 from huaye_window_ai import main as main_module
 from huaye_window_ai.main import create_app
@@ -34,26 +34,20 @@ def test_login_validation_does_not_echo_codes(settings: object) -> None:
 
 def test_access_log_contains_status_and_excludes_query(settings: object) -> None:
     app = create_app(settings)  # type: ignore[arg-type]
-    records: list[logging.LogRecord] = []
-
-    class CaptureHandler(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            records.append(record)
-
-    handler = CaptureHandler()
-    access_logger = logging.getLogger("huaye_window_ai.access")
+    records: list[dict[str, Any]] = []
     with TestClient(app) as client:
-        access_logger.addHandler(handler)
+        # sink 必须在 lifespan 完成日志初始化后注册，否则 configure_logging 会按设计清理旧 sink。
+        sink_id = logger.add(lambda message: records.append(message.record), enqueue=False)
         try:
             response = client.get("/health/live?temporary=value")
         finally:
-            access_logger.removeHandler(handler)
+            logger.remove(sink_id)
 
     assert response.status_code == 200
-    completed = next(record for record in records if record.getMessage() == "HTTP 请求完成")
-    assert completed.fields["path"] == "/health/live"  # type: ignore[attr-defined]
-    assert completed.fields["statusCode"] == 200  # type: ignore[attr-defined]
-    assert "temporary" not in str(completed.fields)  # type: ignore[attr-defined]
+    completed = next(record for record in records if record["message"] == "HTTP 请求完成")
+    assert completed["extra"]["fields"]["path"] == "/health/live"
+    assert completed["extra"]["fields"]["statusCode"] == 200
+    assert "temporary" not in str(completed["extra"]["fields"])
 
 
 def test_main_starts_uvicorn_with_app_settings(monkeypatch: Any, settings: Any) -> None:
