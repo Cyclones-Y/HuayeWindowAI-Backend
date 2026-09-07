@@ -1,0 +1,116 @@
+{
+  "source": "HuayeWindowAI-MP/data/solutions.ts；默认选区沿用 pages/home/index.ts；图片尺寸由实际 JPEG 读取。方案描述沿用原副标题，默认选项取原有序列表首项。",
+  "solutions": [
+    {
+      "id": "solution-living-panorama",
+      "name": "客厅全景静音窗",
+      "subtitle": "大视野与密封性能兼顾",
+      "description": "大视野与密封性能兼顾",
+      "room": "LIVING_ROOM",
+      "needs": ["QUIET", "INSULATION", "VENTILATION"],
+      "frame_colors": [
+        {"code": "SPACE_GRAY", "label": "太空灰", "colorHex": "#454b48", "available": true},
+        {"code": "MATTE_BLACK", "label": "哑光黑", "colorHex": "#242826", "available": true},
+        {"code": "PORCELAIN_WHITE", "label": "瓷泳白", "colorHex": "#e9e7df", "available": true}
+      ],
+      "glass_options": [
+        {"code": "DOUBLE_HOLLOW", "label": "双层中空玻璃", "available": true},
+        {"code": "LOW_E", "label": "Low-E 节能玻璃", "available": true}
+      ],
+      "default_frame_color_code": "SPACE_GRAY",
+      "default_glass_code": "DOUBLE_HOLLOW",
+      "pricing_note": "量尺后按实际尺寸报价",
+      "thumbnail_path": "living-after-thumb.jpg",
+      "cover_path": "living-after.jpg",
+      "gallery_paths": [],
+      "features": ["窄边大视野", "多道密封", "内开内倒"],
+      "available": true,
+      "sort_order": 10
+    },
+    {
+      "id": "solution-bedroom-quiet",
+      "name": "卧室深静隔音窗",
+      "subtitle": "面向临街卧室的安静方案",
+      "description": "面向临街卧室的安静方案",
+      "room": "BEDROOM",
+      "needs": ["QUIET", "INSULATION", "SAFETY"],
+      "frame_colors": [
+        {"code": "DARK_COFFEE", "label": "深咖灰", "colorHex": "#554f48", "available": true},
+        {"code": "MATTE_BLACK", "label": "哑光黑", "colorHex": "#242826", "available": true}
+      ],
+      "glass_options": [
+        {"code": "TRIPLE_LAMINATED", "label": "三玻两腔玻璃", "available": true},
+        {"code": "LAMINATED_HOLLOW", "label": "夹胶中空玻璃", "available": true}
+      ],
+      "default_frame_color_code": "DARK_COFFEE",
+      "default_glass_code": "TRIPLE_LAMINATED",
+      "pricing_note": "量尺后按隔音配置报价",
+      "thumbnail_path": "bedroom-after-thumb.jpg",
+      "cover_path": "bedroom-after.jpg",
+      "gallery_paths": [],
+      "features": ["加强隔音", "保温密封", "安全防护"],
+      "available": true,
+      "sort_order": 20
+    },
+    {
+      "id": "solution-balcony-seal",
+      "name": "阳台封窗通景方案",
+      "subtitle": "封好阳台，也保留通透感",
+      "description": "封好阳台，也保留通透感",
+      "room": "BALCONY",
+      "needs": ["SAFETY", "INSULATION", "VENTILATION"],
+      "frame_colors": [
+        {"code": "SPACE_GRAY", "label": "太空灰", "colorHex": "#454b48", "available": true},
+        {"code": "MATTE_BLACK", "label": "哑光黑", "colorHex": "#242826", "available": true}
+      ],
+      "glass_options": [
+        {"code": "DOUBLE_HOLLOW", "label": "双层中空玻璃", "available": true},
+        {"code": "LOW_E", "label": "Low-E 节能玻璃", "available": true}
+      ],
+      "default_frame_color_code": "SPACE_GRAY",
+      "default_glass_code": "DOUBLE_HOLLOW",
+      "pricing_note": "量尺后确认转角与开扇配置",
+      "thumbnail_path": "balcony-after-thumb.jpg",
+      "cover_path": "balcony-after.jpg",
+      "gallery_paths": [],
+      "features": ["通景大玻璃", "转角加固", "灵活通风"],
+      "available": true,
+      "sort_order": 30
+    }
+  ],
+  "sampleScenes": [
+    {
+      "id": "sample_living_room_01",
+      "name": "客厅落地窗",
+      "scene_type": "LIVING_ROOM",
+      "thumbnail_path": "living-before.jpg",
+      "width": 810,
+      "height": 1215,
+      "default_selection": {"x": 0.12, "y": 0.12, "width": 0.76, "height": 0.7},
+      "available": true,
+      "sort_order": 10
+    },
+    {
+      "id": "sample_bedroom_01",
+      "name": "卧室窗户",
+      "scene_type": "BEDROOM",
+      "thumbnail_path": "bedroom-before.jpg",
+      "width": 810,
+      "height": 1215,
+      "default_selection": {"x": 0.12, "y": 0.12, "width": 0.76, "height": 0.7},
+      "available": true,
+      "sort_order": 20
+    },
+    {
+      "id": "sample_balcony_01",
+      "name": "阳台窗户",
+      "scene_type": "BALCONY",
+      "thumbnail_path": "balcony-before.jpg",
+      "width": 810,
+      "height": 1215,
+      "default_selection": {"x": 0.12, "y": 0.12, "width": 0.76, "height": 0.7},
+      "available": true,
+      "sort_order": 30
+    }
+  ]
+}

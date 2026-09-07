@@ -5,6 +5,7 @@ from __future__ import annotations
 import socket
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from importlib.resources import files
 from typing import Any
 
 import httpx
@@ -12,6 +13,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from redis.asyncio import Redis
 from sqlalchemy import text
@@ -21,9 +23,12 @@ from huaye_window_ai.core.config import Settings, get_settings
 from huaye_window_ai.core.errors import AppError
 from huaye_window_ai.core.logging import configure_logging
 from huaye_window_ai.core.middleware import RequestIdMiddleware
+from huaye_window_ai.core.upload_limit import PhotoUploadLimitMiddleware
 from huaye_window_ai.db.session import create_engine, create_session_factory
+from huaye_window_ai.integrations.photo_storage import create_photo_storage
 from huaye_window_ai.integrations.wechat import WechatClient
 from huaye_window_ai.services.auth import AuthService
+from huaye_window_ai.services.photos import PhotoService
 from huaye_window_ai.services.rate_limit import LoginRateLimiter
 from huaye_window_ai.services.session import SessionStore
 
@@ -139,6 +144,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.redis = redis
         app.state.http = http
         app.state.session_store = session_store
+        photo_storage = create_photo_storage(config)
+        app.state.photo_storage = photo_storage
+        app.state.photo_service = PhotoService(config, photo_storage)
         app.state.login_rate_limiter = LoginRateLimiter(
             redis,
             config.login_ip_limit_per_minute,
@@ -168,6 +176,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             logger.bind(shutdown_phase="application_shutdown").info(f"⏳ {config.app_name}开始关闭")
             await http.aclose()
+            await photo_storage.aclose()
             await redis.aclose()
             await engine.dispose()
             logger.bind(shutdown_phase="application_shutdown").info(f"👋 {config.app_name}已关闭")
@@ -181,8 +190,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
         lifespan=lifespan,
     )
+    app.add_middleware(
+        PhotoUploadLimitMiddleware,
+        upload_path=f"{config.api_prefix}/photos",
+        max_file_bytes=config.photo_max_bytes,
+    )
+    # RequestId 位于上传限制外层，确保提前拒绝请求时仍有链路标识和访问日志。
     app.add_middleware(RequestIdMiddleware)
-    app.include_router(v1_router)
+    app.include_router(v1_router, prefix=config.api_prefix)
+    # 这里只公开随包发布的目录演示图；用户照片始终留在独立私有存储中。
+    app.mount("/catalog", StaticFiles(directory=str(files("huaye_window_ai").joinpath("data/public/catalog"))))
 
     @app.exception_handler(AppError)
     async def handle_app_error(request: Request, exc: AppError) -> JSONResponse:

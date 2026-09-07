@@ -22,6 +22,46 @@ MySQL 和 Redis 默认采用分项配置，便于阅读和排错；容器平台�
 | `APP_PORT` | `8000` | HTTP 监听端口 |
 | `APP_DOCS_ENABLED` | `true` | 是否启用 `/docs`；生产环境必须关闭 |
 | `APP_STARTUP_CHECKS_ENABLED` | `true` | 启动时是否主动检查 MySQL 与 Redis |
+| `API_PREFIX` | `/v1` | 所有业务接口统一前缀，可改 `/api/v1`；末尾 `/` 自动去除，空值表示不加前缀 |
+| `API_PUBLIC_BASE_URL` | `http://127.0.0.1:8000` | 客户端可访问的地址，不含业务前缀，用于本地照片签名预览 |
+| `CATALOG_PUBLIC_BASE_URL` | 空值 | 空值派生为 `API_PUBLIC_BASE_URL/catalog`；可配置已同步目录素材的 CDN 地址 |
+
+例如 `.env` 配置：
+
+```dotenv
+API_PREFIX=/api/v1
+API_PUBLIC_BASE_URL=http://192.168.1.100:8000
+```
+
+重启后业务接口为 `/api/v1/auth/wechat/login`、`/api/v1/solutions`、`/api/v1/photos` 等，
+Swagger 自动显示这些真实路径。前端请求中的 `/v1` 需要同步改为 `/api/v1`；服务不同时保留两套别名。
+`/health/live`、`/health/ready`、`/docs`、`/openapi.json`、`/catalog/*` 不随前缀改变。
+若 `.env.development` 等环境配置也定义同名字段，它们仍按原有优先级覆盖基础 `.env`。
+
+## 照片配置
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PHOTO_STORAGE_BACKEND` | `local` | `local` 私有文件目录，或 `s3` 私有对象存储 |
+| `PHOTO_LOCAL_DIRECTORY` | `data/photos` | 相对目录按项目根目录解析；不会作为静态目录公开 |
+| `PHOTO_MAX_BYTES` | `10485760` | 上传文件上限 10 MiB；请求体另允许 64 KiB multipart 开销 |
+| `PHOTO_MAX_PIXELS` | `40000000` | 解码前校验像素总数，限制超大图内存消耗 |
+| `PHOTO_THUMBNAIL_MAX_EDGE` | `512` | 缩略图最长边，保持比例、不放大小图 |
+| `PHOTO_PREVIEW_TTL_SECONDS` | `3600` | 预览签名有效期，允许 60～86400 秒 |
+| `PHOTO_URL_SIGNING_KEY` | 空值 | local 的 HMAC 密钥；开发留空使用随机进程密钥，生产必须至少 32 字符 |
+| `PHOTO_S3_BUCKET` | 空值 | s3 模式必填，Bucket 必须预先配置为私有 |
+| `PHOTO_S3_ENDPOINT_URL` | 未设置 | S3 兼容服务端点；标准 AWS 环境可不配置 |
+| `PHOTO_S3_REGION` | 未设置 | 对象存储区域；未设置时沿用 SDK 配置 |
+| `PHOTO_S3_ACCESS_KEY_ID` | 空值 | 与 secret 成对配置，或均留空使用 SDK 凭据链 |
+| `PHOTO_S3_SECRET_ACCESS_KEY` | 空值 | 只在未提交环境文件或密钥管理中填写 |
+
+生产环境的公网资源地址及显式 S3 端点必须使用 HTTPS。本地模式多进程部署时各进程必须使用相同
+签名密钥和共享持久化目录；开发随机密钥在进程重启后会使旧预览链接失效。
+Compose 已挂载 `./data/photos:/app/data/photos`；如果改存储目录，需要同步修改持久卷。
+
+切换存储后端、目录或 Bucket 前应先迁移已有对象。数据库保存对象键，直接切换配置不会自动搬迁图片。
+S3 开启版本保留时，删除接口移除当前可访问对象，历史版本仍按 Bucket 生命周期规则清理。
+第一批接口只删除照片；后续任务和结果引用照片时，需要接入引用保留规则。
 
 ## MySQL 与 Redis
 

@@ -10,7 +10,11 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 from huaye_window_ai.core.config import DatabaseSettings
-from huaye_window_ai.db import models  # noqa: F401
+from huaye_window_ai.db import (
+    catalog_models,  # noqa: F401
+    models,  # noqa: F401
+    photo_models,  # noqa: F401
+)
 from huaye_window_ai.db.base import Base
 
 config = context.config

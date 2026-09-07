@@ -1,6 +1,6 @@
 # HuayeWindowAI Backend
 
-华业门窗 AI 效果预览小程序后端。第一阶段提供 FastAPI 基础设施、MySQL/Redis 健康检查，以及微信手机号一键登录；方案、图片和 AI 生成接口将在后续阶段接入。
+华业门窗 AI 效果预览小程序后端。当前提供微信手机号登录、方案目录、公开样例、私有照片上传和删除，以及 MySQL/Redis 健康检查。AI 生成、效果历史和预约接口尚未接入。
 
 ## 技术栈
 
@@ -18,6 +18,7 @@
 ```powershell
 uv sync --all-groups
 uv run alembic upgrade head
+uv run python scripts/seed_catalog.py
 ```
 
 4. 启动服务：
@@ -31,6 +32,14 @@ uv run python src\huaye_window_ai\main.py
 
 开发环境可访问 `http://127.0.0.1:8000/docs`。探针为 `/health/live` 与 `/health/ready`。
 完整环境变量和日志说明见 [配置与日志](docs/configuration.md)。
+第一批接口的参数、响应、图片存储与联调步骤见 [方案与照片接口](docs/api-first-batch.md)。
+
+业务路径统一读取 `.env` 的 `API_PREFIX`（默认 `/v1`，例如改为 `/api/v1`），修改后重启服务；
+微信登录也会随此前缀调整。`/docs`、`/openapi.json`、`/health/*` 和公开目录图片 `/catalog/*` 保持固定地址。
+`API_PUBLIC_BASE_URL` 填客户端实际能访问的域名或局域网地址，不包含 `API_PREFIX`，用于生成照片预览链接。
+
+种子脚本默认只补缺失的三套方案和三个样例，不覆盖已有目录修改。未导入时目录查询返回空列表；
+服务启动不会自行创建表或写入种子。初始目录及公开图片复用现有小程序素材，不代表真实 AI 生成结果。
 
 启动后控制台会显示应用版本、运行环境、Python 版本、MySQL/Redis 检查结果、应用与 Swagger 访问地址。
 运行日志按日期写入 `logs/年/月/日/info.log`，警告与错误另写入同目录的 `error.log`；两类文件均支持滚动、保留和压缩配置。

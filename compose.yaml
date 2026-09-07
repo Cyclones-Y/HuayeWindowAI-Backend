@@ -48,6 +48,7 @@ services:
       - "8000:8000"
     volumes:
       - ./logs:/app/logs
+      - ./data/photos:/app/data/photos
     depends_on:
       mysql:
         condition: service_healthy

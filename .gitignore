@@ -3,6 +3,7 @@
 .env.test
 .env.production
 logs/
+data/photos/
 .venv/
 __pycache__/
 *.py[cod]

@@ -11,6 +11,7 @@ COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 COPY alembic.ini ./
 COPY alembic ./alembic
+COPY scripts ./scripts
 RUN uv sync --frozen --no-dev
 
 EXPOSE 8000
