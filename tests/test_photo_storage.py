@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -333,6 +334,17 @@ async def test_s3_sdk_failure_hides_provider_details(monkeypatch: pytest.MonkeyP
     assert caught.value.code == "PHOTO_STORAGE_UNAVAILABLE"
     assert caught.value.status_code == 503
     assert "credentials" not in caught.value.message
+
+
+async def test_s3_reads_lossless_render_snapshot_above_provider_upload_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """私有无损快照可能超过供应商 30MB 限制；worker 在读取后才缩小模型输入。"""
+    payload = b"x" * (31 * 1024 * 1024)
+    body = io.BytesIO(payload)
+    fake = SimpleNamespace(get_object=lambda **kwargs: {"Body": body})
+    storage = S3PhotoStorage(bucket="private-photos")
+    monkeypatch.setattr(storage, "_get_client", lambda: fake)
+    assert await storage.read(KEY) == payload
+    assert body.closed
 
 
 async def test_factory_uses_configured_absolute_local_preview_url(settings: Settings, tmp_path: Path) -> None:

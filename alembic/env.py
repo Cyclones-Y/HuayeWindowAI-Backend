@@ -14,6 +14,7 @@ from huaye_window_ai.db import (
     catalog_models,  # noqa: F401
     models,  # noqa: F401
     photo_models,  # noqa: F401
+    render_models,  # noqa: F401
 )
 from huaye_window_ai.db.base import Base
 

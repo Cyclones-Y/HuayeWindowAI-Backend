@@ -67,6 +67,6 @@ async def preview_photo(
     data = await service.preview(photo_id, expires, signature, session)
     return Response(
         content=data,
-        media_type="image/jpeg",
+        media_type="image/png" if data.startswith(b"\x89PNG") else "image/jpeg",
         headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
     )

@@ -30,6 +30,7 @@ from huaye_window_ai.integrations.wechat import WechatClient
 from huaye_window_ai.services.auth import AuthService
 from huaye_window_ai.services.photos import PhotoService
 from huaye_window_ai.services.rate_limit import LoginRateLimiter
+from huaye_window_ai.services.renders import RenderService
 from huaye_window_ai.services.session import SessionStore
 
 _ALL_INTERFACES_HOST = "0.0.0.0"  # noqa: S104 - 仅用于识别用户明确配置的监听范围。
@@ -147,6 +148,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         photo_storage = create_photo_storage(config)
         app.state.photo_storage = photo_storage
         app.state.photo_service = PhotoService(config, photo_storage)
+        app.state.render_service = RenderService(config, photo_storage)
         app.state.login_rate_limiter = LoginRateLimiter(
             redis,
             config.login_ip_limit_per_minute,

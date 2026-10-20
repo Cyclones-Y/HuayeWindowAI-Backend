@@ -60,6 +60,23 @@ services:
       timeout: 3s
       retries: 10
 
+  render-worker:
+    build: .
+    command: ["uv", "run", "python", "-m", "huaye_window_ai.worker"]
+    # 未配置模型密钥时 API 仍可运行；显式启用 profile 才启动执行进程。
+    profiles: ["render"]
+    env_file: .env
+    environment:
+      DATABASE_URL: mysql+asyncmy://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}?charset=utf8mb4
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./logs:/app/logs
+      - ./data/photos:/app/data/photos
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   mysql-data:
   redis-data:

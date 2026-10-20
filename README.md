@@ -59,6 +59,9 @@ docker compose up --build
 
 ## 验证
 
+Seedream 5.0 Pro 任务、独立 worker、启用配置及接口见 [真实生成任务](docs/render-generation.md)。
+生成默认关闭；升级业务数据库与付费调用前需要按文档完成审核。
+
 ```powershell
 uv run ruff check .
 uv run ruff format --check .

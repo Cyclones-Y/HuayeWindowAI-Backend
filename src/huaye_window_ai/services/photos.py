@@ -14,12 +14,14 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 # pillow-heif 的公开重导出缺少显式类型导出，保留官方入口以免依赖内部模块路径。
 from pillow_heif import register_heif_opener  # type: ignore[attr-defined]
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from huaye_window_ai.core.config import Settings
 from huaye_window_ai.core.errors import AppError
 from huaye_window_ai.db.photo_models import Photo
+from huaye_window_ai.db.render_models import RenderTask
 from huaye_window_ai.integrations.photo_storage import LocalPhotoStorage, PhotoStorage
 from huaye_window_ai.repositories.photos import PhotoRepository
 from huaye_window_ai.schemas.photos import UploadedPhotoData
@@ -171,15 +173,26 @@ class PhotoService:
         """先禁用照片再清理对象，存储暂时失败时保留墓碑，允许同一请求安全重试。"""
 
         repository = PhotoRepository(session)
+        # 创建任务与删除在同一源照片行上串行化，防止模型准备过程中物理删除输入。
+        await session.scalar(select(Photo).where(Photo.id == photo_id).with_for_update())
         photo = await repository.get_owned(photo_id, user_id)
         if photo is None:
             if await repository.exists(photo_id):
                 raise AppError("RESOURCE_FORBIDDEN", "无权操作该照片", status_code=403)
             raise AppError("RESOURCE_NOT_FOUND", "照片不存在", status_code=404)
+        # 鉴权已建立 MySQL 一致性快照；这里必须 current read，才能看到等待行锁期间入队的任务。
+        busy = await session.scalar(
+            select(RenderTask.id)
+            .where(RenderTask.photo_id == photo_id, RenderTask.status.in_(["QUEUED", "PROCESSING"]))
+            .limit(1)
+            .with_for_update()
+        )
+        if busy is not None or photo.purpose in {"RENDER_INPUT", "RENDER_RESULT"}:
+            raise AppError("PHOTO_IN_USE", "照片关联生成任务，请等待任务结束或通过效果记录清理", status_code=409)
         if photo.deleted_at is None:
             photo.deleted_at = datetime.now(UTC)
             await session.commit()
-        # 当前阶段尚无生成任务/结果引用；引入引用后必须在此接入保留策略，再决定是否物理清理。
+        # 已完成结果持有独立原图快照，因此删除源照片不会破坏历史对比。
         await self._storage.delete(photo.storage_key)
         await self._storage.delete(photo.thumbnail_key)
 

@@ -36,6 +36,8 @@ class PhotoStorage(Protocol):
 
     async def delete(self, key: str) -> None: ...
 
+    async def read(self, key: str) -> bytes: ...
+
     async def signed_url(self, key: str, photo_id: str, expires_at: datetime) -> str: ...
 
     async def aclose(self) -> None: ...
@@ -303,6 +305,32 @@ class S3PhotoStorage:
 
         if self._client is not None:
             await asyncio.to_thread(self._client.close)
+
+    async def read(self, key: str) -> bytes:
+        """后端直接读取私有源图，无需让供应商访问短期签名或局域网 URL。"""
+        from typing import Any
+
+        _validate_key(key)
+
+        def fetch() -> bytes:
+            client = cast(Any, self._get_client())
+            response = client.get_object(Bucket=self._bucket, Key=key)
+            body = response["Body"]
+            try:
+                # 40MP RGB 的无损 PNG 可超过模型上传的 30MB；私有快照须保留原尺寸。
+                # 128MiB 容纳原始像素和 PNG 开销，模型输入在 worker 中另行缩小。
+                limit = 128 * 1024 * 1024
+                data: bytes = body.read(limit + 1)
+                if len(data) > limit:
+                    raise ValueError("私有图像超过读取上限")
+                return data
+            finally:
+                body.close()
+
+        try:
+            return await asyncio.to_thread(fetch)
+        except Exception:
+            raise _storage_unavailable() from None
 
 
 def create_photo_storage(settings: Settings) -> PhotoStorage:

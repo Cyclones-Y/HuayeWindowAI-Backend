@@ -91,6 +91,15 @@ class Settings(DatabaseSettings):
     photo_s3_access_key_id: SecretStr = SecretStr("")
     photo_s3_secret_access_key: SecretStr = SecretStr("")
 
+    # 模型仅由 worker 调用；不开启或缺少密钥时创建接口明确拒绝，不回退演示图。
+    render_enabled: bool = False
+    ark_api_key: SecretStr = SecretStr("")
+    ark_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
+    seedream_model: str = "doubao-seedream-5-0-pro-260628"
+    render_worker_concurrency: int = Field(default=2, ge=1, le=16)
+    render_provider_timeout_seconds: float = Field(default=300, ge=10, le=600)
+    render_task_timeout_seconds: float = Field(default=420, ge=30, le=1200)
+
     redis_url: str | None = None
     redis_host: str = "127.0.0.1"
     redis_port: int = Field(default=6379, ge=1, le=65535)
@@ -149,7 +158,7 @@ class Settings(DatabaseSettings):
             raise ValueError("API_PREFIX 必须为空或以 / 开头的路径，例如 /v1、/api/v1")
         return normalized
 
-    @field_validator("api_public_base_url", "catalog_public_base_url", "photo_s3_endpoint_url")
+    @field_validator("api_public_base_url", "catalog_public_base_url", "photo_s3_endpoint_url", "ark_base_url")
     @classmethod
     def validate_public_url(cls, value: str | None) -> str | None:
         """公开链接只接受 HTTP(S)，不允许凭据或查询串混入生成的资源 URL。"""
@@ -187,6 +196,10 @@ class Settings(DatabaseSettings):
 
     @model_validator(mode="after")
     def validate_production_docs(self) -> Self:
+        if not self.ark_base_url.startswith("https://"):
+            raise ValueError("ARK_BASE_URL 必须使用 HTTPS，避免泄露模型密钥")
+        if self.render_task_timeout_seconds <= self.render_provider_timeout_seconds:
+            raise ValueError("任务总超时必须大于模型调用总超时，以便准备图片及保存结果")
         if self.app_env == "production" and self.app_docs_enabled:
             raise ValueError("生产环境默认必须关闭 OpenAPI 文档")
         if not self.api_public_base_url:
