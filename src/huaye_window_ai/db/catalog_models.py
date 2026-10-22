@@ -18,7 +18,8 @@ def _utc_now() -> datetime:
 class WindowSolution(Base):
     """保存完整方案及有序配置项，避免前端缓存成为可用组合的事实来源。
 
-    图片仅记录相对资源路径，域名在响应时从运行配置生成；JSON 数组保留展示顺序。
+    图片仅记录相对资源路径，本地/CDN 拼域名，OSS 模式按 catalog 前缀签发限时链接；
+    JSON 数组保留展示顺序，数据库不持久化会过期的签名 URL。
     更新 JSON 配置时应整体赋值，SQLAlchemy 不跟踪原地修改嵌套列表的变化。
     """
 

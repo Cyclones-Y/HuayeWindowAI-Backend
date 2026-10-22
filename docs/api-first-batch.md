@@ -24,18 +24,18 @@ uv run python -m huaye_window_ai --env development
 环境选择以 `--env` 为准，其余配置仍允许进程变量覆盖；不读取基础 `.env` 或叠加另一文件，生产文件缺失也不回退开发配置。
 两个实际环境文件均不提交；`.env.example` 仅作模板。
 
-在选中的 `.env.development` 或 `.env.production` 中配置统一前缀和客户端能够访问的地址：
+在选中的 `.env.development` 或 `.env.production` 中配置统一前缀与 OSS 图片域名：
 
 ```dotenv
 API_PREFIX=/api/v1
-API_PUBLIC_BASE_URL=http://192.168.1.100:8000
-PHOTO_STORAGE_BACKEND=local
-PHOTO_LOCAL_DIRECTORY=data/photos
+PHOTO_STORAGE_BACKEND=oss
+OSS_ENDPOINT=https://oss.zmintz.com
 ```
 
 此配置使登录变为 `POST /api/v1/auth/wechat/login`，方案变为 `GET /api/v1/solutions`。
-地址示例需替换为实际主机地址；真机不能用 `127.0.0.1` 访问开发电脑。前端当前硬编码的 `/v1`
-要同步调整，本次后端开发未切换前端 MockGateway。全部配置见 [配置与日志](configuration.md)。
+前端 `config/api.ts` 的 origin 填客户端能访问的后端地址，prefix 同步配置为 `/api/v1`；
+OSS 域名仅用于图片签名，后端环境文件不再需要 `API_PUBLIC_BASE_URL`。
+Bucket、地域与密钥等完整配置见 [配置与日志](configuration.md)。
 
 ## 方案列表
 
@@ -136,6 +136,27 @@ PHOTO_LOCAL_DIRECTORY=data/photos
 
 ## 删除照片
 
+### 按账户找回上传照片
+
+`GET /v1/photos?size=50&cursor=...` 需要 Bearer 登录，返回：
+
+```json
+{
+  "items": [{"photoId": "photo_0123456789abcdef0123456789abcdef", "createdAt": "2026-10-22T03:00:00Z", "deleted": false}],
+  "nextCursor": null
+}
+```
+
+只列当前账户用途为 `WINDOW_PREVIEW` 的现场上传，不包含其他用户照片、生成输入和效果图，
+不返回存储 key 或图片签名。`size` 为 1～100；后续页携带上一页的 `nextCursor`，为空即结束。
+按不可变照片 ID 升序分页，逐页删除不会产生 offset 位移。列表包含已逻辑删除的墓碑，
+让客户端能重新执行删除，补偿之前失败的物理清理；因此 `deleted=true` 不代表底层对象删除已经确认。
+
+该接口可以找回上传响应或设备索引丢失的资源。前端必须用明确的账户级清理入口告知覆盖所有设备，
+不能静默扩大原“本设备清理”的范围。接口本身不删除照片，不需要数据库结构迁移。
+
+### 删除单张上传照片
+
 `DELETE /v1/photos/{photoId}`，需要 Bearer 登录。只能删除本人照片；其他用户资源返回
 403 / `RESOURCE_FORBIDDEN`，不存在返回 404 / `RESOURCE_NOT_FOUND`。
 
@@ -147,7 +168,7 @@ PHOTO_LOCAL_DIRECTORY=data/photos
 
 存储清理失败返回 503，保留删除标记以允许重试。本地旧签名不能再读取逻辑删除的照片。
 S3 链接的访问是否已撤销取决于对象删除是否成功；清理失败时旧签名最多仍可用到其到期时间。
-当前尚无生成任务引用照片，未来接入生成结果后需增加引用与保留策略。
+生成中的任务引用源照片时返回 `409 / PHOTO_IN_USE`；已完成结果保存独立原图快照，删除源照片不影响回看。
 
 ## 本地存储的预览支持路由
 

@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "alembic>=1.16,<2",
+  "alibabacloud-oss-v2>=1.4.1,<2",
   "asyncmy>=0.2.10,<1",
   "boto3>=1.40,<2",
   # MySQL 8 caching_sha2_password/sha256_password 的 RSA 认证由 asyncmy 按需调用。

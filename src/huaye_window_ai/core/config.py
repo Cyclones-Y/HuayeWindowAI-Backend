@@ -82,12 +82,13 @@ class Settings(DatabaseSettings):
     app_docs_enabled: bool = True
     app_startup_checks_enabled: bool = True
 
-    # 路由与签名预览共用前缀；公网地址显式配置，避免根据不可信 Host 生成图片链接。
+    # 业务路由使用统一前缀；OSS 图片地址仅使用 OSS_ENDPOINT。
     api_prefix: str = "/v1"
+    # 仅供旧存储适配器兼容，当前 OSS 环境文件无需配置这两个字段。
     api_public_base_url: str = "http://127.0.0.1:8000"
     catalog_public_base_url: str = ""
 
-    photo_storage_backend: Literal["local", "s3"] = "local"
+    photo_storage_backend: Literal["local", "s3", "oss"] = "local"
     photo_local_directory: Path = _PROJECT_ROOT / "data" / "photos"
     photo_url_signing_key: SecretStr = SecretStr("")
     photo_max_bytes: int = Field(default=10 * 1024 * 1024, ge=1024, le=100 * 1024 * 1024)
@@ -99,6 +100,14 @@ class Settings(DatabaseSettings):
     photo_s3_region: str | None = None
     photo_s3_access_key_id: SecretStr = SecretStr("")
     photo_s3_secret_access_key: SecretStr = SecretStr("")
+
+    # 原生 OSS 使用 V4 签名与 CNAME 域名；不与 S3 的端点、凭据或签名配置混用。
+    oss_bucket: str = ""
+    oss_region: str = "cn-beijing"
+    oss_endpoint: str = ""
+    oss_access_key_id: SecretStr = SecretStr("")
+    oss_access_key_secret: SecretStr = SecretStr("")
+    catalog_oss_prefix: str = Field(default="catalog", pattern=r"^catalog(?:/[A-Za-z0-9_-]+)*$")
 
     # 模型仅由 worker 调用；不开启或缺少密钥时创建接口明确拒绝，不回退演示图。
     render_enabled: bool = False
@@ -173,7 +182,9 @@ class Settings(DatabaseSettings):
             raise ValueError("API_PREFIX 必须为空或以 / 开头的路径，例如 /v1、/api/v1")
         return normalized
 
-    @field_validator("api_public_base_url", "catalog_public_base_url", "photo_s3_endpoint_url", "ark_base_url")
+    @field_validator(
+        "api_public_base_url", "catalog_public_base_url", "photo_s3_endpoint_url", "ark_base_url", "oss_endpoint"
+    )
     @classmethod
     def validate_public_url(cls, value: str | None) -> str | None:
         """公开链接只接受 HTTP(S)，不允许凭据或查询串混入生成的资源 URL。"""
@@ -219,10 +230,12 @@ class Settings(DatabaseSettings):
             raise ValueError("worker 心跳有效期必须大于心跳间隔")
         if self.app_env == "production" and self.app_docs_enabled:
             raise ValueError("生产环境默认必须关闭 OpenAPI 文档")
-        if not self.api_public_base_url:
-            raise ValueError("API_PUBLIC_BASE_URL 不可为空")
-        if not self.catalog_public_base_url:
-            self.catalog_public_base_url = f"{self.api_public_base_url}/catalog"
+        if self.photo_storage_backend != "oss":
+            # 旧本地/CDN 链接才需要公开基址；OSS 不派生或要求本地图片地址。
+            if not self.api_public_base_url:
+                raise ValueError("API_PUBLIC_BASE_URL 不可为空")
+            if not self.catalog_public_base_url:
+                self.catalog_public_base_url = f"{self.api_public_base_url}/catalog"
         if self.photo_storage_backend == "s3":
             if not self.photo_s3_bucket.strip():
                 raise ValueError("S3 存储必须配置 PHOTO_S3_BUCKET")
@@ -230,12 +243,23 @@ class Settings(DatabaseSettings):
                 self.photo_s3_secret_access_key.get_secret_value()
             ):
                 raise ValueError("PHOTO_S3_ACCESS_KEY_ID 与 PHOTO_S3_SECRET_ACCESS_KEY 必须成对配置")
+        if self.photo_storage_backend == "oss":
+            # 禁止自动降级为本地存储，否则同一数据库的图片可能散落在两个存储位置。
+            if not self.oss_bucket.strip() or not self.oss_region.strip():
+                raise ValueError("OSS 存储必须配置 OSS_BUCKET 与 OSS_REGION")
+            endpoint = urlsplit(self.oss_endpoint)
+            if endpoint.scheme != "https" or endpoint.path not in {"", "/"}:
+                raise ValueError("OSS_ENDPOINT 必须是无路径的 HTTPS 自定义域名")
+            if not self.oss_access_key_id.get_secret_value() or not self.oss_access_key_secret.get_secret_value():
+                raise ValueError("OSS 存储必须配置 OSS_ACCESS_KEY_ID 与 OSS_ACCESS_KEY_SECRET")
         if self.app_env == "production":
             if self.photo_storage_backend == "local" and len(self.photo_url_signing_key.get_secret_value()) < 32:
                 raise ValueError("生产本地存储必须配置至少 32 字符的 PHOTO_URL_SIGNING_KEY")
-            urls = (self.api_public_base_url, self.catalog_public_base_url, self.photo_s3_endpoint_url)
-            if any(value and not value.startswith("https://") for value in urls):
-                raise ValueError("生产资源地址必须使用 HTTPS")
+            if self.photo_storage_backend != "oss":
+                # OSS_ENDPOINT 的 HTTPS 已在上方校验；不能因无关旧字段的 HTTP 默认值拒绝启动。
+                urls = (self.api_public_base_url, self.catalog_public_base_url, self.photo_s3_endpoint_url)
+                if any(value and not value.startswith("https://") for value in urls):
+                    raise ValueError("生产资源地址必须使用 HTTPS")
         return self
 
     @property

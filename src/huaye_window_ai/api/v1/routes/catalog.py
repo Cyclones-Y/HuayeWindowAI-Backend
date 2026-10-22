@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from typing import cast
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -10,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from huaye_window_ai.core.errors import AppError
 from huaye_window_ai.core.responses import ApiResponse
 from huaye_window_ai.db.session import get_db_session
+from huaye_window_ai.integrations.oss_storage import catalog_object_key
+from huaye_window_ai.integrations.photo_storage import PhotoStorage
 from huaye_window_ai.repositories.catalog import CatalogRepository
 from huaye_window_ai.schemas.catalog import (
     FrameColor,
@@ -27,10 +31,21 @@ from huaye_window_ai.schemas.catalog import (
 router = APIRouter(tags=["方案目录"])
 
 
-def _asset_url(request: Request, path: str) -> str:
-    """公开目录资产使用配置域名，避免代理 Host 或内部监听地址污染响应链接。"""
+async def _asset_url(request: Request, path: str) -> str:
+    """OSS 目录只签发运营配置的 catalog 对象；本地/CDN 模式保留原资源地址。"""
 
-    base_url: str = request.app.state.settings.catalog_public_base_url
+    settings = request.app.state.settings
+    if settings.photo_storage_backend == "oss":
+        try:
+            key = catalog_object_key(settings.catalog_oss_prefix, path)
+        except ValueError:
+            raise AppError("CATALOG_ASSET_INVALID", "方案图片配置无效", status_code=503) from None
+        storage = cast(PhotoStorage, request.app.state.photo_storage)
+        # 仅目录素材免登录；用户照片不会通过本路由签名，也不能提交任意路径请求签名。
+        return await storage.signed_url(
+            key, "", datetime.now(UTC) + timedelta(seconds=settings.photo_preview_ttl_seconds)
+        )
+    base_url: str = settings.catalog_public_base_url
     return f"{base_url.rstrip('/')}/{quote(path.lstrip('/'), safe='/')}"
 
 
@@ -54,7 +69,7 @@ async def list_solutions(
             id=row.id,
             name=row.name,
             subtitle=row.subtitle,
-            thumbnail_url=_asset_url(request, row.thumbnail_path),
+            thumbnail_url=await _asset_url(request, row.thumbnail_path),
             room=RoomType(row.room),
             needs=[NeedType(value) for value in row.needs],
             features=row.features,
@@ -85,8 +100,8 @@ async def get_solution(
         name=row.name,
         subtitle=row.subtitle,
         description=row.description,
-        cover_url=_asset_url(request, row.cover_path),
-        gallery_urls=[_asset_url(request, path) for path in row.gallery_paths],
+        cover_url=await _asset_url(request, row.cover_path),
+        gallery_urls=[await _asset_url(request, path) for path in row.gallery_paths],
         room=RoomType(row.room),
         needs=[NeedType(value) for value in row.needs],
         features=row.features,
@@ -113,7 +128,7 @@ async def list_sample_scenes(
             id=row.id,
             name=row.name,
             scene_type=RoomType(row.scene_type),
-            thumbnail_url=_asset_url(request, row.thumbnail_path),
+            thumbnail_url=await _asset_url(request, row.thumbnail_path),
             width=row.width,
             height=row.height,
             default_selection=NormalizedSelection.model_validate(row.default_selection),

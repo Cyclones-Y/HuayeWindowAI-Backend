@@ -4,6 +4,7 @@
 .env.production
 logs/
 data/photos/
+data/oss-migration-backups/
 .venv/
 __pycache__/
 *.py[cod]

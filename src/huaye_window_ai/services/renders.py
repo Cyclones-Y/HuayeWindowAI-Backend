@@ -66,7 +66,15 @@ class RenderService:
         self.settings, self.storage = settings, storage
 
     async def catalog_image(self, name: str) -> bytes:
-        """只读取随包发布的目录素材；数据库字段也不能越出素材目录。"""
+        """与展示使用同一目录路径；OSS 模式直接读私有对象，禁止回退到旧本地素材。"""
+        if self.settings.photo_storage_backend == "oss":
+            from huaye_window_ai.integrations.oss_storage import catalog_object_key
+
+            try:
+                key = catalog_object_key(self.settings.catalog_oss_prefix, name)
+            except ValueError:
+                raise AppError("RENDER_REFERENCE_INVALID", "方案参考图无效", status_code=422) from None
+            return await self.storage.read(key)
         from pathlib import Path
 
         def read() -> bytes:

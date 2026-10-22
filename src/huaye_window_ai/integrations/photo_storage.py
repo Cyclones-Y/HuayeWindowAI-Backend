@@ -1,4 +1,4 @@
-"""照片私有存储适配器：开发环境落本地，部署环境可切换 S3 兼容服务。
+"""照片私有存储适配器：本地、S3 兼容服务与原生 OSS。
 
 调用者必须先验证照片与账户关系；此模块只接受服务端生成的对象键。磁盘及
 同步 SDK 操作均在线程中执行，避免大图写入和凭证解析阻塞其他异步请求。
@@ -336,6 +336,11 @@ class S3PhotoStorage:
 def create_photo_storage(settings: Settings) -> PhotoStorage:
     """按已校验配置选择存储；构造阶段不读写磁盘，也不连接外部服务。"""
 
+    if settings.photo_storage_backend == "oss":
+        # 延迟导入避免 OSS 对通用协议的复用形成模块初始化循环。
+        from huaye_window_ai.integrations.oss_storage import OssPhotoStorage
+
+        return OssPhotoStorage(settings)
     if settings.photo_storage_backend == "s3":
         return S3PhotoStorage(
             bucket=settings.photo_s3_bucket,

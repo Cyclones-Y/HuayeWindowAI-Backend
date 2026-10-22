@@ -71,15 +71,15 @@ MySQL 和 Redis 默认采用分项配置，便于阅读和排错；容器平台�
 | `APP_DOCS_ENABLED` | `true` | 是否启用 `/docs`；生产环境必须关闭 |
 | `APP_STARTUP_CHECKS_ENABLED` | `true` | 启动时是否主动检查 MySQL 与 Redis |
 | `API_PREFIX` | `/v1` | 所有业务接口统一前缀，可改 `/api/v1`；末尾 `/` 自动去除，空值表示不加前缀 |
-| `API_PUBLIC_BASE_URL` | `http://127.0.0.1:8000` | 客户端可访问的地址，不含业务前缀，用于本地照片签名预览 |
-| `CATALOG_PUBLIC_BASE_URL` | 空值 | 空值派生为 `API_PUBLIC_BASE_URL/catalog`；可配置已同步目录素材的 CDN 地址 |
 
 例如所选的 `.env.development` 或 `.env.production` 配置：
 
 ```dotenv
 API_PREFIX=/api/v1
-API_PUBLIC_BASE_URL=http://192.168.1.100:8000
 ```
+
+OSS 模式不需要 `API_PUBLIC_BASE_URL`，图片签名域名由 `OSS_ENDPOINT` 配置；
+小程序访问后端的 origin 在前端 `config/api.ts` 配置。
 
 重启后业务接口为 `/api/v1/auth/wechat/login`、`/api/v1/solutions`、`/api/v1/photos` 等，
 Swagger 自动显示这些真实路径。前端请求中的 `/v1` 需要同步改为 `/api/v1`；服务不同时保留两套别名。
@@ -88,30 +88,33 @@ Swagger 自动显示这些真实路径。前端请求中的 `/v1` 需要同步�
 
 ## 照片配置
 
-| 变量 | 默认值 | 说明 |
+开发、生产统一使用 OSS，下面列出当前模板配置；环境文件已移除本地存储与 S3 参数。
+
+| 变量 | 当前模板值 | 说明 |
 | --- | --- | --- |
-| `PHOTO_STORAGE_BACKEND` | `local` | `local` 私有文件目录，或 `s3` 私有对象存储 |
-| `PHOTO_LOCAL_DIRECTORY` | `data/photos` | 相对目录按项目根目录解析；不会作为静态目录公开 |
+| `PHOTO_STORAGE_BACKEND` | `oss` | 原生 OSS 私有存储，API 与 worker 必须一致 |
 | `PHOTO_MAX_BYTES` | `10485760` | 上传文件上限 10 MiB；请求体另允许 64 KiB multipart 开销 |
 | `PHOTO_MAX_PIXELS` | `40000000` | 解码前校验像素总数，限制超大图内存消耗 |
 | `PHOTO_THUMBNAIL_MAX_EDGE` | `512` | 缩略图最长边，保持比例、不放大小图 |
 | `PHOTO_PREVIEW_TTL_SECONDS` | `3600` | 预览签名有效期，允许 60～86400 秒 |
-| `PHOTO_URL_SIGNING_KEY` | 空值 | local 的 HMAC 密钥；开发留空使用随机进程密钥，生产必须至少 32 字符 |
-| `PHOTO_S3_BUCKET` | 空值 | s3 模式必填，Bucket 必须预先配置为私有 |
-| `PHOTO_S3_ENDPOINT_URL` | 未设置 | S3 兼容服务端点；标准 AWS 环境可不配置 |
-| `PHOTO_S3_REGION` | 未设置 | 对象存储区域；未设置时沿用 SDK 配置 |
-| `PHOTO_S3_ACCESS_KEY_ID` | 空值 | 与 secret 成对配置，或均留空使用 SDK 凭据链 |
-| `PHOTO_S3_SECRET_ACCESS_KEY` | 空值 | 只在未提交环境文件或密钥管理中填写 |
+| `OSS_BUCKET` | `huayewindowai` | 必填，保持私有 |
+| `OSS_REGION` | `cn-beijing` | OSS V4 签名的地域，必须与 Bucket 一致 |
+| `OSS_ENDPOINT` | `https://oss.zmintz.com` | 已绑定 Bucket 的 HTTPS 自定义域名，不加 Bucket 名或路径 |
+| `OSS_ACCESS_KEY_ID` | 空值 | 后端环境文件填写 RAM 访问密钥 ID，不放入小程序 |
+| `OSS_ACCESS_KEY_SECRET` | 空值 | 与 ID 一同填写，不提交仓库或记录日志 |
+| `CATALOG_OSS_PREFIX` | `catalog` | 目录图片在 OSS 中的前缀，数据库保存的相对路径保持不变；不得使用 `photos` |
 
-生产环境的公网资源地址及显式 S3 端点必须使用 HTTPS。本地模式多进程部署时各进程必须使用相同
-签名密钥和共享持久化目录；开发随机密钥在进程重启后会使旧预览链接失效。
-Compose 已挂载 `./data/photos:/app/data/photos`；如果改存储目录，需要同步修改持久卷。
+OSS 自定义域名必须使用 HTTPS，签名有效期内可访问。Compose 不再挂载本地照片目录，
+图片持久化由 OSS 提供；日志、MySQL 和 Redis 的持久化仍保留。
 
 切换存储后端、目录或 Bucket 前应先迁移已有对象。数据库保存对象键，直接切换配置不会自动搬迁图片。
-S3 开启版本保留时，删除接口移除当前可访问对象，历史版本仍按 Bucket 生命周期规则清理。
+OSS 开启版本保留时，删除接口移除当前可访问对象，历史版本仍按 Bucket 生命周期规则清理。
 进行中的生成任务阻止删除源照片；已完成结果持有独立输入快照。跨存储写入与失败清理使用
 `photo_write_intents` 持久登记，需升级到迁移 `20261020_0004`。队列期限、worker 心跳、定期回收
 及部署连接预算见 [生成任务与清理约束](render-generation.md)。
+
+原生 OSS 配置与已有图片迁移步骤见 [OSS 接入说明](oss-storage.md)。API 与 worker 必须同步切换，
+不可一边写本地一边写 OSS，也不能依赖切换配置自动迁移已有对象。
 
 ## MySQL 与 Redis
 

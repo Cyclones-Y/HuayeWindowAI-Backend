@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from huaye_window_ai.core.config import Settings
 from huaye_window_ai.db.base import Base
 from huaye_window_ai.db.catalog_models import SampleScene, WindowSolution
+from huaye_window_ai.integrations.photo_storage import create_photo_storage
 from huaye_window_ai.main import create_app
 from huaye_window_ai.repositories.catalog import seed_catalog
 
@@ -208,3 +209,39 @@ async def test_seed_options_and_bundled_images_are_consistent(
         assert asset.status_code == 200
         with Image.open(io.BytesIO(asset.content)) as image:
             assert image.size == (scene["width"], scene["height"])
+
+
+async def test_oss_catalog_returns_signed_paths_without_persisting_urls(catalog_client, settings: Settings) -> None:
+    """真实数据库路径保持不变；列表、详情及样例都必须签名，不能泄漏可任意签名的入口。"""
+    client, factory = catalog_client
+    app = client._transport.app
+    configured = Settings(
+        _env_file=None,
+        **{
+            **settings.model_dump(),
+            **{
+                "photo_storage_backend": "oss",
+                "oss_bucket": "huayewindowai",
+                "oss_region": "cn-beijing",
+                "oss_endpoint": "https://oss.example.test",
+                "oss_access_key_id": "synthetic-id",
+                "oss_access_key_secret": "synthetic-secret",
+                "catalog_oss_prefix": "catalog",
+            },
+        },
+    )
+    app.state.settings = configured
+    storage = create_photo_storage(configured)
+    app.state.photo_storage = storage
+    try:
+        summary = (await client.get("/v1/solutions")).json()["data"]["items"][0]
+        detail = (await client.get(f"/v1/solutions/{summary['id']}")).json()["data"]
+        sample = (await client.get("/v1/sample-scenes")).json()["data"]["items"][0]
+        for field in [summary["thumbnailUrl"], detail["coverUrl"], sample["thumbnailUrl"]]:
+            assert field.startswith("https://oss.example.test/catalog/")
+            assert "x-oss-signature=" in field
+        async with factory() as session:
+            row = await session.get(WindowSolution, summary["id"])
+            assert row.thumbnail_path == "living-after-thumb.jpg"
+    finally:
+        await storage.aclose()
