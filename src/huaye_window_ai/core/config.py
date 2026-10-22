@@ -6,7 +6,7 @@ import os
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal, Self
+from typing import Any, Literal, Self
 from urllib.parse import quote, urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -14,32 +14,41 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # IDE 直接运行源码时，当前工作目录可能落在 src/huaye_window_ai；配置文件应始终从项目根目录读取。
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
-_ENV_FILE = _PROJECT_ROOT / ".env"
 
 
 def _environment_name() -> str:
-    """在创建 Settings 前确定配置层，兼容系统环境变量与基础 `.env`。"""
+    """只用启动进程的 APP_ENV 选择配置，未指定时使用开发环境。"""
 
-    if configured := os.getenv("APP_ENV"):
-        return configured.strip().lower()
-    try:
-        for line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
-            key, separator, value = line.partition("=")
-            if separator and key.strip() == "APP_ENV":
-                return value.strip().strip("'\"").lower()
-    except OSError:
-        pass
-    return "development"
-
-
-# 基础配置先加载，按环境命名的文件后加载并覆盖；不存在环境文件时 Pydantic 会自然跳过。
-_ENV_FILES = (_ENV_FILE, _PROJECT_ROOT / f".env.{_environment_name()}")
+    environment = os.getenv("APP_ENV", "development").strip().lower()
+    if environment not in {"development", "production", "test"}:
+        raise ValueError("APP_ENV 必须是 development、production 或 test")
+    return environment
 
 
 class DatabaseSettings(BaseSettings):
     """Alembic 和应用共享的数据库配置，支持分项配置和完整 DSN 覆盖。"""
 
-    model_config = SettingsConfigDict(env_file=_ENV_FILES, env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=None, env_file_encoding="utf-8", extra="ignore")
+
+    def __init__(self, **values: Any) -> None:
+        """为应用和迁移按启动环境选择独立文件；显式 _env_file 留给测试与工具注入。"""
+
+        if "_env_file" not in values:
+            environment = _environment_name()
+            # 自动化测试仅使用合成参数，不读开发者文件。每次构造时解析，避免导入顺序固定环境。
+            env_file = None if environment == "test" else _PROJECT_ROOT / f".env.{environment}"
+            if env_file is not None and not env_file.is_file():
+                # Compose/托管平台可直接注入配置；其余情况拒绝缺失文件，避免迁移误连默认库。
+                database_injected = any(
+                    values.get(key) or os.getenv(key.upper()) for key in ("database_url", "db_host")
+                )
+                if not database_injected:
+                    raise ValueError(f"未找到 {env_file}；请创建该文件或注入 DATABASE_URL / DB_HOST")
+            values["_env_file"] = env_file
+            if "app_env" in type(self).model_fields:
+                # 文件中的 APP_ENV 不参与二次选择，运行模式必须与启动选择一致。
+                values.setdefault("app_env", environment)
+        super().__init__(**values)
 
     database_url: str | None = None
     db_host: str = "127.0.0.1"
@@ -62,7 +71,7 @@ class DatabaseSettings(BaseSettings):
 
 
 class Settings(DatabaseSettings):
-    """运行时配置；所有敏感配置只允许通过环境或未提交的 `.env` 注入。"""
+    """运行时配置；敏感值通过进程变量或未提交的独立环境文件注入。"""
 
     app_env: Literal["development", "test", "production"] = "development"
     app_name: str = "华业门窗 AI 小程序后端"

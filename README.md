@@ -11,30 +11,40 @@
 
 ## 本地启动
 
-1. 复制 `.env.example` 为 `.env`，填写本地 MySQL/Redis 和微信 AppID/AppSecret。不要提交 `.env`。
+1. 复制 `.env.example` 为 `.env.development`，保留 `APP_ENV=development`，填写本地 MySQL/Redis 和微信 AppID/AppSecret。
+   生产环境另复制为 `.env.production` 并改为 `APP_ENV=production`；实际两个文件均不提交，`.env.example` 只作为模板。
 2. 创建数据库和最小权限账号。数据库应使用 `utf8mb4`，应用连接的会话时区会固定为 UTC。
 3. 安装依赖并执行迁移：
 
 ```powershell
 uv sync --all-groups
-uv run alembic upgrade head
-uv run python scripts/seed_catalog.py
+uv run python -m huaye_window_ai --env development migrate
+uv run python -m huaye_window_ai --env development seed
 ```
 
 4. 启动服务：
 
 ```powershell
-uv run python src\huaye_window_ai\main.py
+# 开发环境
+uv run python -m huaye_window_ai --env development
+
+# 生产环境（先填写 .env.production）
+uv run python -m huaye_window_ai --env production
 ```
 
-也可以在 PyCharm 中直接运行 `src/huaye_window_ai/main.py`；该入口会读取 `.env` 中的
+也可以在 PyCharm 中直接运行 `src/huaye_window_ai/main.py`；普通本地启动默认 `APP_ENV=development`，
+该入口会读取项目根目录 `.env.development` 中的
 `APP_HOST`、`APP_PORT` 和 `APP_LOG_LEVEL`。IDE 直接运行模式不启用自动重载，便于调试器在同一进程中命中断点。
+命令中的 `--env` 直接选择环境，优先于终端已有的 `APP_ENV`，无需先设置环境变量；PowerShell 和 Linux 使用相同命令。
+末尾可指定 `api`（默认）、`worker`、`migrate`（升级到 head）或 `seed`；`seed --replace` 显式覆盖种子项。
+API 启动不会自动迁移或导入数据，迁移、种子脚本、API 和 worker 必须选择同一环境。
+环境文件不叠加基础 `.env`，生产文件缺失不会回退到开发文件；完整注入配置的部署方式见 [配置与日志](docs/configuration.md)。
 
 开发环境可访问 `http://127.0.0.1:8000/docs`。探针为 `/health/live` 与 `/health/ready`。
 完整环境变量和日志说明见 [配置与日志](docs/configuration.md)。
 第一批接口的参数、响应、图片存储与联调步骤见 [方案与照片接口](docs/api-first-batch.md)。
 
-业务路径统一读取 `.env` 的 `API_PREFIX`（默认 `/v1`，例如改为 `/api/v1`），修改后重启服务；
+业务路径统一读取所选环境文件的 `API_PREFIX`（默认 `/v1`，例如改为 `/api/v1`），修改后重启服务；
 微信登录也会随此前缀调整。`/docs`、`/openapi.json`、`/health/*` 和公开目录图片 `/catalog/*` 保持固定地址。
 `API_PUBLIC_BASE_URL` 填客户端实际能访问的域名或局域网地址，不包含 `API_PREFIX`，用于生成照片预览链接。
 
@@ -48,8 +58,16 @@ uv run python src\huaye_window_ai\main.py
 本机已有 MySQL/Redis 时直接使用 `3306/6379`。若改用 Compose，容器暴露到宿主机的端口为 `13306/16379`，避免冲突：
 
 ```powershell
-docker compose up --build
+# 开发环境（.env.development 内 APP_ENV=development）
+docker compose --env-file .env.development up --build
+
+# 生产环境（.env.production 内 APP_ENV=production）
+docker compose --env-file .env.production up -d --build
 ```
+
+PowerShell 和 Linux 均直接通过 Compose 的 `--env-file` 选择文件，文件内的 `APP_ENV` 需与文件名一致。
+`--env-file` 提供 Compose 插值，`api` 与 `render-worker` 的 `env_file` 才将所选文件注入容器；
+启动进程的 `APP_ENV` 优先，必须与命令中的文件一致，防止两套机制选到不同环境。
 
 ## 微信登录契约
 

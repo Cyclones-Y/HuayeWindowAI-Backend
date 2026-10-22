@@ -4,7 +4,10 @@
 
 ## 配置与启动
 
-后端配置（不要将密钥放入小程序或提交到 Git）：
+后端配置写入选中的 `.env.development` 或 `.env.production`（不要将密钥放入小程序或提交到 Git）：
+从可提交模板 `.env.example` 复制，开发文件保留 `APP_ENV=development`，生产文件改为 `APP_ENV=production`；
+实际两个文件均已被 Git 忽略。启动命令用 `--env` 选择环境，优先于进程 `APP_ENV`；其余配置仍允许进程变量覆盖。
+不读取基础 `.env` 或叠加另一环境文件，生产配置缺失不得回退到开发。
 
 ```dotenv
 RENDER_ENABLED=true
@@ -23,11 +26,28 @@ RENDER_WORKER_HEARTBEAT_TTL_SECONDS=20
 本次可靠性修复新增迁移 `20261020_0004`（`photo_write_intents` 表），需先在临时数据库验证、备份并审核后再升级业务库。本次开发验证不升级当前业务数据库。API 与 worker 应一起升级到包含该迁移的版本，旧写入流程没有持久登记。
 
 ```powershell
-uv run alembic upgrade head
-uv run python -m huaye_window_ai.worker
+# 开发；生产改为 production，并先核对 .env.production
+uv run python -m huaye_window_ai --env development migrate
+uv run python -m huaye_window_ai --env development worker
 ```
 
-API 与 worker 必须使用同一数据库及私有存储配置。本地存储共享 `data/photos`，S3 模式共享 bucket 和访问权限。Compose 的 worker 使用 `render` profile，配置密钥后可执行 `docker compose --profile render up -d --build`。API 健康后 worker 才启动，API 不提供请求内后台生图。
+PowerShell 与 Linux 使用相同命令，生产直接把 `--env development` 改为 `--env production`，无需提前设置环境变量。
+API 启动命令为 `uv run python -m huaye_window_ai --env development`，API 启动不会自动执行迁移。
+API 与 worker 必须使用同一环境、数据库及私有存储配置。本地存储共享 `data/photos`，S3 模式共享 bucket 和访问权限。
+Compose 的 worker 使用 `render` profile，配置密钥并确认真实调用费用后，按环境执行：
+
+```powershell
+# 开发
+docker compose --env-file .env.development --profile render up -d --build
+
+# 生产
+docker compose --env-file .env.production --profile render up -d --build
+```
+
+Linux 使用相同的 Compose 命令。文件内的 `APP_ENV` 必须和所选文件名一致；
+若终端已额外设置 `APP_ENV`，也需与该文件一致。
+`--env-file` 负责 Compose 插值，API/worker 的 `env_file` 才将该文件注入容器。
+API 健康后 worker 才启动，API 不提供请求内后台生图。
 
 `/health/live` 表示 Web 进程存活，供 Compose 的 worker 启动依赖使用；`/health/ready` 检查 MySQL/Redis，在真实生成已启用且密钥非空时还检查 `renderWorker` 心跳。worker 每 5 秒独立报活，最后一个进程离线后最多 20 秒 ready 返回 503。不要将 worker 启动依赖改为 ready，否则首次启动会互相等待。心跳表示进程在线，不代表供应商模型一定可用。
 

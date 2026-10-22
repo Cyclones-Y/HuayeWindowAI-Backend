@@ -5,20 +5,26 @@
 
 ## 初始化与配置
 
-先安装依赖，再在需要启用功能的数据库执行迁移和显式种子导入：
+先将 `.env.example` 复制为 `.env.development` 并填写开发配置（保留 `APP_ENV=development`），
+再安装依赖，在需要启用功能的数据库执行迁移和显式种子导入：
 
 ```powershell
 uv sync --all-groups
-uv run alembic upgrade head
-uv run python scripts/seed_catalog.py
-uv run python src/huaye_window_ai/main.py
+uv run python -m huaye_window_ai --env development migrate
+uv run python -m huaye_window_ai --env development seed
+uv run python -m huaye_window_ai --env development
 ```
 
 迁移新增 `window_solutions`、`sample_scenes`、`photos` 三张表，不改已有账号数据。
 导入脚本默认仅新增缺失项；`--replace` 才会覆盖已有种子方案的字段（包括上下架和排序），应按需使用。
 当前三套初始目录及图片来自小程序现有素材，保留原方案 ID，方便前端接入。
 
-在 `.env` 中配置统一前缀和客户端能够访问的地址：
+生产环境使用独立的 `.env.production`（其中 `APP_ENV=production`），将上述命令的 `--env development`
+改为 `--env production`；PowerShell 与 Linux 使用相同命令，无需提前设置环境变量。
+环境选择以 `--env` 为准，其余配置仍允许进程变量覆盖；不读取基础 `.env` 或叠加另一文件，生产文件缺失也不回退开发配置。
+两个实际环境文件均不提交；`.env.example` 仅作模板。
+
+在选中的 `.env.development` 或 `.env.production` 中配置统一前缀和客户端能够访问的地址：
 
 ```dotenv
 API_PREFIX=/api/v1

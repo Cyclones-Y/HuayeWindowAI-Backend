@@ -39,8 +39,10 @@ services:
         "-c",
         "uv run alembic upgrade head && exec uv run uvicorn huaye_window_ai.main:app --host 0.0.0.0 --port 8000",
       ]
-    env_file: .env
+    # --env-file 为 Compose 插值供值；此处另将同一环境文件注入容器，避免生产误用开发配置。
+    env_file: .env.${APP_ENV:-development}
     environment:
+      APP_ENV: ${APP_ENV:-development}
       APP_HOST: 0.0.0.0
       DATABASE_URL: mysql+asyncmy://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}?charset=utf8mb4
       REDIS_URL: redis://redis:6379/0
@@ -65,8 +67,9 @@ services:
     command: ["uv", "run", "python", "-m", "huaye_window_ai.worker"]
     # 未配置模型密钥时 API 仍可运行；显式启用 profile 才启动执行进程。
     profiles: ["render"]
-    env_file: .env
+    env_file: .env.${APP_ENV:-development}
     environment:
+      APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: mysql+asyncmy://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}?charset=utf8mb4
       REDIS_URL: redis://redis:6379/0
     volumes:

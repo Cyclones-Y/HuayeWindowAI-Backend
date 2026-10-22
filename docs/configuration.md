@@ -1,12 +1,60 @@
 # 配置与日志
 
-后端从项目根目录的 `.env` 读取基础配置，因此从 PyCharm、命令行或源码子目录启动时行为一致。
-首次运行请复制 `.env.example` 为 `.env`，只在未提交的环境文件中填写真实密码和微信密钥。
+后端只读取项目根目录下所选的 `.env.development` 或 `.env.production`，因此从 PyCharm、命令行或源码子目录启动时行为一致。
+首次运行请复制 `.env.example` 为 `.env.development`，保留 `APP_ENV=development` 并填写开发配置；
+生产环境另复制为 `.env.production`，将其中的 `APP_ENV` 改为 `production`，逐项填写生产配置。
+`.env.example` 仅为可提交模板；实际两个环境文件均已被 Git 忽略，真实密码和微信密钥只保存在本机或部署平台。
 
 ## 配置优先级
 
-程序会根据 `APP_ENV` 继续加载 `.env.development`、`.env.test` 或 `.env.production`，环境文件覆盖基础 `.env`，
-进程环境变量优先级最高。环境文件均已加入 `.gitignore`，可以只在本机或部署平台保存。
+统一入口的 `--env development|production` 决定选哪个文件，并优先于终端已有的 `APP_ENV`。
+未传 `--env` 时沿用进程 `APP_ENV`，两者都未指定时默认为 `development`。运行环境只支持 `development` 和 `production`，
+不读取基础 `.env`，不叠加另一环境文件，也不从生产回退到开发。文件内的 `APP_ENV` 必须与选择一致。
+除环境选择以命令参数为准以外，同名进程环境变量优先于所选文件中的值。
+在 IDE 中可使用模块 `huaye_window_ai` 和参数 `--env production`；直接运行原 main.py 仍沿用进程 `APP_ENV`。
+
+所选文件不存在时，只有完整的进程变量注入方式才可启动：至少显式提供 `DATABASE_URL` 或 `DB_HOST` 作为注入入口，
+并同时提供微信凭据及当前环境需要的其他配置，通过正常配置校验。单独设置 `APP_ENV=production` 不代表配置已就绪。
+`APP_ENV=test` 仅供自动化测试注入配置，完全不读环境文件，不创建或使用 `.env.test`。
+
+以下命令在 PowerShell 和 Linux 通用，迁移、种子脚本、API 与 worker 必须保持相同选择：
+
+```powershell
+# 开发（普通本地默认值）
+uv run python -m huaye_window_ai --env development
+
+# 生产（先准备并核对 .env.production）
+uv run python -m huaye_window_ai --env production
+```
+
+```powershell
+# 以下生产命令按需执行；启动 API 不会自动执行迁移或导入数据
+uv run python -m huaye_window_ai --env production worker
+uv run python -m huaye_window_ai --env production migrate
+uv run python -m huaye_window_ai --env production seed
+# 仅在明确需要覆盖已有种子项时使用
+uv run python -m huaye_window_ai --env production seed --replace
+```
+
+## Compose 的环境选择
+
+Compose 的 `--env-file` 为 `${...}` 插值提供值，不会自动把整个文件注入容器。
+`api` 和 `render-worker` 通过 `env_file: .env.${APP_ENV:-development}` 注入同一文件，
+并显式传入 `APP_ENV`；原有容器内 MySQL/Redis 连接地址覆盖仍保留。
+文件内 `APP_ENV` 与命令中的文件名必须一致。Compose 命令不使用 Python 入口的 `--env` 参数；
+若终端已额外设置 `APP_ENV`，它仍优先于 Compose `--env-file`，需确保该值也一致。
+
+```powershell
+# 开发
+docker compose --env-file .env.development up --build
+
+# 生产
+docker compose --env-file .env.production up -d --build
+```
+
+Linux 使用相同的 Compose 命令。
+
+本地进程的完整变量注入方式不适用于此 Compose 文件：Compose 的服务 `env_file` 必须存在。
 
 MySQL 和 Redis 默认采用分项配置，便于阅读和排错；容器平台需要注入完整连接串时，
 可以分别设置 `DATABASE_URL` 和 `REDIS_URL`，它们会覆盖对应的 `DB_*` 与 `REDIS_*` 字段。
@@ -15,7 +63,7 @@ MySQL 和 Redis 默认采用分项配置，便于阅读和排错；容器平台�
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `APP_ENV` | `development` | 运行环境：`development`、`test`、`production` |
+| `APP_ENV` | `development` | 运行环境：`development`、`production`；`test` 仅限自动化注入配置 |
 | `APP_NAME` | `华业门窗 AI 小程序后端` | 日志与 OpenAPI 中显示的服务名 |
 | `APP_VERSION` | `0.1.0` | 当前服务版本 |
 | `APP_HOST` | `127.0.0.1` | 真机局域网联调应设为 `0.0.0.0` |
@@ -26,7 +74,7 @@ MySQL 和 Redis 默认采用分项配置，便于阅读和排错；容器平台�
 | `API_PUBLIC_BASE_URL` | `http://127.0.0.1:8000` | 客户端可访问的地址，不含业务前缀，用于本地照片签名预览 |
 | `CATALOG_PUBLIC_BASE_URL` | 空值 | 空值派生为 `API_PUBLIC_BASE_URL/catalog`；可配置已同步目录素材的 CDN 地址 |
 
-例如 `.env` 配置：
+例如所选的 `.env.development` 或 `.env.production` 配置：
 
 ```dotenv
 API_PREFIX=/api/v1
@@ -36,7 +84,7 @@ API_PUBLIC_BASE_URL=http://192.168.1.100:8000
 重启后业务接口为 `/api/v1/auth/wechat/login`、`/api/v1/solutions`、`/api/v1/photos` 等，
 Swagger 自动显示这些真实路径。前端请求中的 `/v1` 需要同步改为 `/api/v1`；服务不同时保留两套别名。
 `/health/live`、`/health/ready`、`/docs`、`/openapi.json`、`/catalog/*` 不随前缀改变。
-若 `.env.development` 等环境配置也定义同名字段，它们仍按原有优先级覆盖基础 `.env`。
+同名进程变量仍优先；修改未选中的环境文件不会影响当前实例。
 
 ## 照片配置
 

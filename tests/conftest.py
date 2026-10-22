@@ -6,7 +6,8 @@ import os
 
 import pytest
 
-# 全局 ASGI 应用在导入时校验必要配置；测试环境只注入不会覆盖开发者本地环境的占位值。
+# 全局 ASGI 应用在导入时校验配置；测试进程固定 test，避免调用者的生产选择泄漏真实配置。
+os.environ["APP_ENV"] = "test"
 os.environ.setdefault("WECHAT_APP_ID", "wx_test_app")
 os.environ.setdefault("WECHAT_APP_SECRET", "test-secret")
 
@@ -16,6 +17,7 @@ from huaye_window_ai.core.config import Settings
 @pytest.fixture
 def settings() -> Settings:
     return Settings(
+        _env_file=None,
         app_env="test",
         app_startup_checks_enabled=False,
         database_url="sqlite+aiosqlite:///:memory:",
