@@ -4,6 +4,8 @@
 
 ## 技术栈
 
+原生 OSS 存储、密钥填写与图片迁移步骤见 [OSS 接入说明](docs/oss-storage.md)。
+
 - Python 3.12、uv、FastAPI、Pydantic v2
 - SQLAlchemy 2 Async、Alembic、MySQL 8.4
 - Redis 随机会话与微信全局 `access_token` 缓存
@@ -46,7 +48,8 @@ API 启动不会自动迁移或导入数据，迁移、种子脚本、API 和 wo
 
 业务路径统一读取所选环境文件的 `API_PREFIX`（默认 `/v1`，例如改为 `/api/v1`），修改后重启服务；
 微信登录也会随此前缀调整。`/docs`、`/openapi.json`、`/health/*` 和公开目录图片 `/catalog/*` 保持固定地址。
-`API_PUBLIC_BASE_URL` 填客户端实际能访问的域名或局域网地址，不包含 `API_PREFIX`，用于生成照片预览链接。
+图片统一由 `OSS_ENDPOINT` 生成签名链接；后端环境文件不再配置 `API_PUBLIC_BASE_URL`。
+小程序接口地址在前端 `config/api.ts` 配置，不与 OSS 图片域名混用。
 
 种子脚本默认只补缺失的三套方案和三个样例，不覆盖已有目录修改。未导入时目录查询返回空列表；
 服务启动不会自行创建表或写入种子。初始目录及公开图片复用现有小程序素材，不代表真实 AI 生成结果。
@@ -76,6 +79,8 @@ PowerShell 和 Linux 均直接通过 Compose 的 `--env-file` 选择文件，文
 后端不会提供注册、密码或短信验证码接口。手机号按用户要求直接存储在 MySQL 中，仅用于账号识别；日志和 Redis 不保存手机号，微信 `session_key` 不保存、不返回、不记录日志。
 
 ## 验证
+
+上线问题、跨前后端修复状态和验收记录见 [上线问题与修复进度](docs/launch-readiness.md)。
 
 Seedream 5.0 Pro 任务、独立 worker、启用配置及接口见 [真实生成任务](docs/render-generation.md)。
 生成默认关闭；升级业务数据库与付费调用前需要按文档完成审核。
