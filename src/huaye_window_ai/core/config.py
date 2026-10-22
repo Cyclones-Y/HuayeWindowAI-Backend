@@ -99,6 +99,12 @@ class Settings(DatabaseSettings):
     render_worker_concurrency: int = Field(default=2, ge=1, le=16)
     render_provider_timeout_seconds: float = Field(default=300, ge=10, le=600)
     render_task_timeout_seconds: float = Field(default=420, ge=30, le=1200)
+    # 排队时限从最初入队时间计，准备阶段重领不会无限延长等待。
+    render_queue_max_wait_seconds: int = Field(default=900, ge=1, le=86400)
+    render_maintenance_interval_seconds: float = Field(default=5, ge=0.1, le=60)
+    # 进程心跳独立于模型槽位；短暂重启可继续入队，离线由 ready 和排队时限体现。
+    render_worker_heartbeat_interval_seconds: float = Field(default=5, ge=0.1, le=60)
+    render_worker_heartbeat_ttl_seconds: int = Field(default=20, ge=1, le=300)
 
     redis_url: str | None = None
     redis_host: str = "127.0.0.1"
@@ -200,6 +206,8 @@ class Settings(DatabaseSettings):
             raise ValueError("ARK_BASE_URL 必须使用 HTTPS，避免泄露模型密钥")
         if self.render_task_timeout_seconds <= self.render_provider_timeout_seconds:
             raise ValueError("任务总超时必须大于模型调用总超时，以便准备图片及保存结果")
+        if self.render_worker_heartbeat_ttl_seconds <= self.render_worker_heartbeat_interval_seconds:
+            raise ValueError("worker 心跳有效期必须大于心跳间隔")
         if self.app_env == "production" and self.app_docs_enabled:
             raise ValueError("生产环境默认必须关闭 OpenAPI 文档")
         if not self.api_public_base_url:

@@ -10,6 +10,7 @@ from huaye_window_ai.core.responses import ApiResponse
 from huaye_window_ai.db.render_models import RenderResult, RenderTask
 from huaye_window_ai.db.session import get_db_session
 from huaye_window_ai.schemas.render import CreateRenderTask
+from huaye_window_ai.services.render_queue import expire_render_tasks
 from huaye_window_ai.services.renders import RenderService, owned, task_data
 
 router = APIRouter(tags=["真实生成"])
@@ -18,6 +19,16 @@ router = APIRouter(tags=["真实生成"])
 def get_render_service(request: Request) -> RenderService:
     """应用资源可在测试中替换，路由不构造或调用供应商客户端。"""
     return cast(RenderService, request.app.state.render_service)
+
+
+async def refresh_owned_task(request: Request, session: AsyncSession, task_id: str, user_id: str) -> RenderTask:
+    """先验证归属，再结束过期等待；离线 worker 不会阻止查询、重试和清理。"""
+    task = await owned(session, RenderTask, task_id, user_id)
+    await expire_render_tasks(session, request.app.state.settings, task_id=task_id, user_id=user_id)
+    await session.commit()
+    # 条件更新故意不依赖 ORM 缓存，刷新后返回竞争结束后的数据库真实状态。
+    await session.refresh(task)
+    return task
 
 
 @router.post("/render-tasks", status_code=202, response_model=ApiResponse[dict[str, Any]])
@@ -42,9 +53,10 @@ async def get_task(
     user_id: str = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_db_session),
 ) -> ApiResponse[dict[str, Any]]:
-    """轮询只读取当前用户任务，不触发生成或重试。"""
+    """轮询当前用户任务并兜底超时回收，不触发生成或重试。"""
     return ApiResponse(
-        data=task_data(await owned(session, RenderTask, task_id, user_id)), request_id=request.state.request_id
+        data=task_data(await refresh_owned_task(request, session, task_id, user_id)),
+        request_id=request.state.request_id,
     )
 
 
@@ -58,6 +70,7 @@ async def retry_task(
     service: RenderService = Depends(get_render_service),
 ) -> ApiResponse[dict[str, Any]]:
     """显式创建关联重试任务，不修改旧任务失败终态。"""
+    await refresh_owned_task(request, session, task_id, user_id)
     return ApiResponse(
         data=task_data(await service.retry(task_id, user_id, key, session)), request_id=request.state.request_id
     )
@@ -115,5 +128,6 @@ async def delete_task_input(
     service: RenderService = Depends(get_render_service),
 ) -> ApiResponse[None]:
     """设备清理使用：拒绝进行中任务，幂等回收失败任务的私有快照。"""
+    await refresh_owned_task(request, session, task_id, user_id)
     await service.delete_task_input(task_id, user_id, session)
     return ApiResponse(data=None, request_id=request.state.request_id)

@@ -14,9 +14,13 @@ SEEDREAM_MODEL=doubao-seedream-5-0-pro-260628
 RENDER_WORKER_CONCURRENCY=2
 RENDER_PROVIDER_TIMEOUT_SECONDS=300
 RENDER_TASK_TIMEOUT_SECONDS=420
+RENDER_QUEUE_MAX_WAIT_SECONDS=900
+RENDER_MAINTENANCE_INTERVAL_SECONDS=5
+RENDER_WORKER_HEARTBEAT_INTERVAL_SECONDS=5
+RENDER_WORKER_HEARTBEAT_TTL_SECONDS=20
 ```
 
-先在临时数据库验证 `20261008_0003`，备份并审核后再升级业务库。本次开发验证不会升级当前业务数据库。
+本次可靠性修复新增迁移 `20261020_0004`（`photo_write_intents` 表），需先在临时数据库验证、备份并审核后再升级业务库。本次开发验证不升级当前业务数据库。API 与 worker 应一起升级到包含该迁移的版本，旧写入流程没有持久登记。
 
 ```powershell
 uv run alembic upgrade head
@@ -25,6 +29,8 @@ uv run python -m huaye_window_ai.worker
 
 API 与 worker 必须使用同一数据库及私有存储配置。本地存储共享 `data/photos`，S3 模式共享 bucket 和访问权限。Compose 的 worker 使用 `render` profile，配置密钥后可执行 `docker compose --profile render up -d --build`。API 健康后 worker 才启动，API 不提供请求内后台生图。
 
+`/health/live` 表示 Web 进程存活，供 Compose 的 worker 启动依赖使用；`/health/ready` 检查 MySQL/Redis，在真实生成已启用且密钥非空时还检查 `renderWorker` 心跳。worker 每 5 秒独立报活，最后一个进程离线后最多 20 秒 ready 返回 503。不要将 worker 启动依赖改为 ready，否则首次启动会互相等待。心跳表示进程在线，不代表供应商模型一定可用。
+
 ## 接口
 
 路径相对于 `API_PREFIX`；均需 `Authorization: Bearer ...`，响应沿用 `{code,message,data,requestId}`。
@@ -32,7 +38,7 @@ API 与 worker 必须使用同一数据库及私有存储配置。本地存储�
 | 方法与路径 | 行为 |
 |---|---|
 | POST `/render-tasks` | 保存任务，HTTP 202，必填 `Idempotency-Key` |
-| GET `/render-tasks/{taskId}` | 获取真实状态和阶段，不触发生成 |
+| GET `/render-tasks/{taskId}` | 获取真实状态和阶段，兜底结束过期等待，不触发模型调用 |
 | POST `/render-tasks/{taskId}/retry` | 失败且可重试时创建关联新任务，HTTP 202，必填 `Idempotency-Key` |
 | GET `/render-results?page=1&size=20` | 当前账户历史，返回 items/page/size/total/hasNext |
 | GET `/render-results/{resultId}` | 配置快照与重新签发的私有图片地址 |
@@ -77,9 +83,12 @@ API 与 worker 必须使用同一数据库及私有存储配置。本地存储�
 
 - 多执行槽通过条件更新竞争，30 秒租约、10 秒心跳。旧 token 和过期租约不能写回结果；每任务最多一条结果。
 - 供应商调用前持久化 GENERATING。PREPARING 中断可重新领取；调用后的超时或失联记录失败，绝不自动重发模型请求。API 和 worker 不自动重试付费调用。
+- QUEUED 从最初入队起最多等待 `RENDER_QUEUE_MAX_WAIT_SECONDS`（默认 900 秒），超时标记 FAILED/RENDER_QUEUE_TIMEOUT，用户可手动重试或清理。API 查询、重试、清理前均核对过期状态；API 与 worker 每 5 秒独立维护，模型进程离线时也不会永久等待。若两种进程都关闭，则在下次启动或请求时回收。
 - 请求标准模式、非流式、PNG/Base64。Pro 固定单张，不传其不支持的组图参数。使用原图、标记图、封面参考图；仅模型输入等比缩小到 2048 边长，以符合供应商图片大小限制。
 - 输出约 1536² 像素并保持原比例。结果映射回原尺寸，只融合矩形区域，羽化在框内；无损 PNG 保证框外像素保持。成功状态与结果入库在同一事务提交，且图片先保存。
 - 未结束任务阻止源照片删除。结果、失败快照清理先提交墓碑，再删除私有对象；失败可再清理。任务记录保留避免旧幂等请求再次触发付费调用。
+- 上传原图、生成输入和结果图在写文件前独立提交 `PhotoWriteIntent`，业务事务持有登记行锁，并将 Photo 和登记移除一起提交。提交应答丢失时以新事务核对，不能因异常直接删除有效图片。登记使用不占用业务连接池的短连接，数据库需为在途写入预留额外连接，避免池满时外层事务相互等待。
+- 即时补偿后保留未提交对象的登记，以便复核远端迟到 PUT；API/worker 每 60 秒处理最多 50 条超过一小时宽限期的登记，跳过正在写入的行锁，删除失败退避 5 分钟，不阻塞其他到期对象。有效 Photo 引用始终保留；数据库或存储不可用时保留登记供恢复后重试。这不会自动定位升级前没有登记的历史孤立对象，旧对象需单独核对。
 - 小程序只清理本设备登记资源。响应未确认的创建必须先继续查看，清理操作不重新提交生成。其他设备及索引丢失资源需运营者处理。
 
 ## 验证与真实验收

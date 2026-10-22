@@ -19,6 +19,7 @@ from huaye_window_ai.db.photo_models import Photo
 from huaye_window_ai.db.render_models import RenderResult, RenderTask
 from huaye_window_ai.integrations.photo_storage import PhotoStorage
 from huaye_window_ai.schemas.render import CreateRenderTask
+from huaye_window_ai.services.photo_journal import compensate_photo_write, prepare_photo_write
 from huaye_window_ai.services.render_images import open_image, output_dimensions, png
 
 STAGE_LABELS = {
@@ -81,8 +82,8 @@ class RenderService:
         except OSError:
             raise AppError("RENDER_REFERENCE_INVALID", "方案参考图无法读取", status_code=422) from None
 
-    async def write_photo(self, data: bytes, user_id: str, purpose: str) -> Photo:
-        """调用者提交 Photo；任何半成品写入失败均尽力回收自己的随机对象键。"""
+    async def write_photo(self, data: bytes, user_id: str, purpose: str, session: AsyncSession) -> Photo:
+        """先登记再写私有对象；调用者在同一持锁事务提交 Photo，失败则核对后补偿。"""
         identifier = uuid.uuid4().hex
         image = await asyncio.to_thread(open_image, data)
         normalized = await asyncio.to_thread(png, image)
@@ -100,22 +101,17 @@ class RenderService:
             mime_type="image/png",
         )
         try:
+            await prepare_photo_write(session, photo)
             await self.storage.put(photo.storage_key, normalized, "image/png")
             await self.storage.put(photo.thumbnail_key, await asyncio.to_thread(png, thumbnail), "image/png")
         except BaseException:
-            await self.cleanup_photo(photo)
+            await self.cleanup_photo(photo, session)
             raise
         return photo
 
-    async def cleanup_photo(self, photo: Photo) -> None:
-        """数据库未持久化时补偿文件写入；不让清理异常遮盖原业务错误。"""
-        from loguru import logger
-
-        for key in (photo.storage_key, photo.thumbnail_key):
-            try:
-                await self.storage.delete(key)
-            except Exception:
-                logger.bind(fields={"photoId": photo.id}).warning("生成临时对象清理失败")
+    async def cleanup_photo(self, photo: Photo, session: AsyncSession) -> None:
+        """提交应答丢失不等于回滚；根据新事务中的持久登记决定是否删除对象。"""
+        await compensate_photo_write(session, self.storage, photo)
 
     async def _existing(
         self, session: AsyncSession, user_id: str, key: str, client_id: str, digest: str
@@ -205,7 +201,7 @@ class RenderService:
         """创建与重试共用事务与唯一键补偿；输入、配置和模型均由调用者明确冻结。"""
         body = request.model_dump(mode="json", by_alias=True)
         digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        input_photo = await self.write_photo(original, user_id, "RENDER_INPUT")
+        input_photo = await self.write_photo(original, user_id, "RENDER_INPUT", session)
         task = RenderTask(
             id=f"task_{uuid.uuid4().hex}",
             user_id=user_id,
@@ -225,15 +221,13 @@ class RenderService:
             session.add(task)
             await session.commit()
         except IntegrityError:
-            await session.rollback()
-            await self.cleanup_photo(input_photo)
+            await self.cleanup_photo(input_photo, session)
             existing = await self._existing(session, user_id, key, str(request.client_request_id), digest)
             if existing is None:
                 raise
             return existing
         except BaseException:
-            await session.rollback()
-            await self.cleanup_photo(input_photo)
+            await self.cleanup_photo(input_photo, session)
             raise
         return task
 

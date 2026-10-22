@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import socket
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from importlib.resources import files
 from typing import Any
 
@@ -30,6 +31,7 @@ from huaye_window_ai.integrations.wechat import WechatClient
 from huaye_window_ai.services.auth import AuthService
 from huaye_window_ai.services.photos import PhotoService
 from huaye_window_ai.services.rate_limit import LoginRateLimiter
+from huaye_window_ai.services.render_queue import run_render_maintenance, worker_is_online
 from huaye_window_ai.services.renders import RenderService
 from huaye_window_ai.services.session import SessionStore
 
@@ -107,6 +109,16 @@ async def _check_dependencies(app: FastAPI, request_id: str) -> dict[str, bool]:
             request_id=request_id,
             fields={"dependency": "redis", "exceptionType": type(exc).__name__},
         ).warning("Redis 依赖检查失败")
+    settings = app.state.settings
+    if settings.render_enabled and settings.ark_api_key.get_secret_value():
+        checks["renderWorker"] = False
+        try:
+            checks["renderWorker"] = await worker_is_online(app.state.redis)
+        except Exception as exc:
+            logger.bind(
+                request_id=request_id,
+                fields={"dependency": "renderWorker", "exceptionType": type(exc).__name__},
+            ).warning("生成 worker 心跳检查失败")
     return checks
 
 
@@ -159,6 +171,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             session_store,
             app_id=config.wechat_app_id,
         )
+        # 后台维护不依赖轮询请求或付费执行进程；关闭连接前先等待它取消。
+        maintenance = asyncio.create_task(run_render_maintenance(app.state.session_factory, config, photo_storage))
         try:
             checks: dict[str, bool] | str = "skipped"
             if config.app_startup_checks_enabled:
@@ -177,6 +191,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             logger.bind(shutdown_phase="application_shutdown").info(f"⏳ {config.app_name}开始关闭")
+            maintenance.cancel()
+            with suppress(asyncio.CancelledError):
+                await maintenance
             await http.aclose()
             await photo_storage.aclose()
             await redis.aclose()
@@ -244,7 +261,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         checks = await _check_dependencies(request.app, _request_id(request))
         status_code = 200 if all(checks.values()) else 503
         if status_code != 200:
-            _set_access_error(request, "DEPENDENCY_UNAVAILABLE", "MySQL 或 Redis 连接不可用")
+            _set_access_error(request, "DEPENDENCY_UNAVAILABLE", "依赖服务或生成 worker 不可用")
         return JSONResponse(
             status_code=status_code,
             content={

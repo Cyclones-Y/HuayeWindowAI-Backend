@@ -50,7 +50,8 @@ def test_access_log_contains_status_and_excludes_query(settings: object) -> None
             logger.remove(sink_id)
 
     assert response.status_code == 200
-    completed = next(record for record in records if record["extra"].get("fields", {}).get("statusCode") == 200)
+    # 周期维护会并发产生日志；只选择访问记录，不能假定每条日志都带结构化 fields。
+    completed = next(record for record in records if (record["extra"].get("fields") or {}).get("statusCode") == 200)
     assert completed["extra"]["fields"]["path"] == "/test-success"
     assert completed["extra"]["fields"]["statusCode"] == 200
     assert "temporary" not in str(completed["extra"]["fields"])
@@ -74,7 +75,7 @@ def test_failed_access_log_contains_business_reason(settings: object) -> None:
             logger.remove(sink_id)
 
     assert response.status_code == 401
-    failed = next(record for record in records if record["extra"].get("fields", {}).get("statusCode") == 401)
+    failed = next(record for record in records if (record["extra"].get("fields") or {}).get("statusCode") == 401)
     assert failed["extra"]["fields"]["errorCode"] == "WECHAT_CODE_INVALID"
     assert failed["extra"]["fields"]["errorMessage"] == "微信登录凭证已失效，请重试"
     assert "WECHAT_CODE_INVALID" in failed["message"]

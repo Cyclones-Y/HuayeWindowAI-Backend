@@ -25,6 +25,7 @@ from huaye_window_ai.services.render_images import (
     png,
     provider_image,
 )
+from huaye_window_ai.services.render_queue import maintain_render_queue
 from huaye_window_ai.services.renders import RenderService
 
 
@@ -47,35 +48,16 @@ class RenderWorker:
 
     async def recover(self) -> None:
         """准备阶段可安全重新领取；调用已开始的任务失联后失败，绝不自动重复计费。"""
-        now = datetime.now(UTC)
-        async with self.factory() as session, session.begin():
-            stale = (RenderTask.status == "PROCESSING", RenderTask.lease_expires_at < now)
-            await session.execute(
-                update(RenderTask)
-                .where(*stale, RenderTask.stage == "PREPARING")
-                .values(status="QUEUED", stage="QUEUED", worker_token=None, lease_expires_at=None, started_at=None)
-            )
-            await session.execute(
-                update(RenderTask)
-                .where(*stale, RenderTask.stage != "PREPARING")
-                .values(
-                    status="FAILED",
-                    worker_token=None,
-                    lease_expires_at=None,
-                    failure={
-                        "code": "RENDER_WORKER_INTERRUPTED",
-                        "message": "生成连接中断，重试可能产生新的模型调用费用",
-                        "retryable": True,
-                    },
-                )
-            )
+        await maintain_render_queue(self.factory, self.settings)
 
     async def claim(self) -> RenderTask | None:
         """原子条件更新领取一个任务；失败竞争者不调用供应商。"""
+        await self.recover()
         async with self.factory() as session:
+            cutoff = datetime.now(UTC) - timedelta(seconds=self.settings.render_queue_max_wait_seconds)
             candidate = await session.scalar(
                 select(RenderTask.id)
-                .where(RenderTask.status == "QUEUED")
+                .where(RenderTask.status == "QUEUED", RenderTask.created_at > cutoff)
                 .order_by(RenderTask.created_at, RenderTask.id)
                 .limit(1)
             )
@@ -85,7 +67,12 @@ class RenderWorker:
             now = datetime.now(UTC)
             result = await session.execute(
                 update(RenderTask)
-                .where(RenderTask.id == candidate, RenderTask.status == "QUEUED")
+                .where(
+                    RenderTask.id == candidate,
+                    RenderTask.status == "QUEUED",
+                    # 再次判断期限，防止候选读取与实际领取之间跨过排队截止点。
+                    RenderTask.created_at > now - timedelta(seconds=self.settings.render_queue_max_wait_seconds),
+                )
                 .values(
                     status="PROCESSING",
                     stage="PREPARING",
@@ -158,9 +145,10 @@ class RenderWorker:
                 )
             await self.change(task, stage="SAVING")
             composite = await asyncio.to_thread(composite_selection, original, generated, selection)
-            after = await self.service.write_photo(composite, task.user_id, "RENDER_RESULT")
             result_id = f"result_{uuid.uuid4().hex}"
             async with self.factory() as session, session.begin():
+                # 从登记锁到最终提交使用同一事务，维护进程不能误删仍在保存的效果图。
+                after = await self.service.write_photo(composite, task.user_id, "RENDER_RESULT", session)
                 updated = await session.execute(
                     update(RenderTask)
                     .where(
@@ -197,12 +185,11 @@ class RenderWorker:
             logger.bind(fields={"taskId": task.id}).info("生成结果已保存")
         except BaseException:
             if after is not None:
-                await self.service.cleanup_photo(after)
+                await self.service.cleanup_photo(after, session)
             raise
 
     async def run_once(self) -> bool:
         """处理至多一个任务；错误只保存可公开分类，不记录供应商响应或住宅图像。"""
-        await self.recover()
         task = await self.claim()
         if task is None:
             return False

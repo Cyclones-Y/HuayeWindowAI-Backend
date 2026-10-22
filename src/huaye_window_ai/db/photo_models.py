@@ -29,3 +29,21 @@ class Photo(Base):
     mime_type: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PhotoWriteIntent(Base):
+    """文件写入前独立提交的登记；无外键，业务事务回滚或进程退出后仍能定位残留对象。
+
+    写入方必须在业务事务中锁住登记，并与 Photo 一起删除登记；维护任务只回收到期且未被
+    写入方锁定的登记。这里不保存图片、账户信息或签名 URL。
+    """
+
+    __tablename__ = "photo_write_intents"
+
+    photo_id: Mapped[str] = mapped_column(String(41), primary_key=True)
+    storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    thumbnail_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False, index=True
+    )

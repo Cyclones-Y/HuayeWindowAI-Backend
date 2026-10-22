@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from fastapi import UploadFile
-from loguru import logger
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 # pillow-heif 的公开重导出缺少显式类型导出，保留官方入口以免依赖内部模块路径。
@@ -25,6 +24,7 @@ from huaye_window_ai.db.render_models import RenderTask
 from huaye_window_ai.integrations.photo_storage import LocalPhotoStorage, PhotoStorage
 from huaye_window_ai.repositories.photos import PhotoRepository
 from huaye_window_ai.schemas.photos import UploadedPhotoData
+from huaye_window_ai.services.photo_journal import compensate_photo_write, prepare_photo_write
 
 # 只注册 HEIF 解码器，不接受 Pillow 额外支持的 GIF、SVG 或其他文件类型。
 register_heif_opener()
@@ -134,18 +134,15 @@ class PhotoService:
         )
         keys = (photo.storage_key, photo.thumbnail_key)
         try:
+            await prepare_photo_write(session, photo)
             await self._storage.put(keys[0], processed.original, "image/jpeg")
             await self._storage.put(keys[1], processed.thumbnail, "image/jpeg")
             preview_url = await self._storage.signed_url(keys[0], photo.id, expires_at)
             await PhotoRepository(session).add(photo)
             await session.commit()
         except BaseException:
-            # 数据库与文件系统没有共同事务，失败时删除两份对象（含可能部分写入的当前对象）。
-            # 清理失败仅记安全摘要并保留原错误，避免把失败上传误报成成功。
-            try:
-                await session.rollback()
-            finally:
-                await self._cleanup_failed_upload(keys, photo.id)
+            # 先核对提交结果，避免 COMMIT 成功但响应丢失时误删；清理失败仍有持久登记。
+            await compensate_photo_write(session, self._storage, photo)
             raise
         return UploadedPhotoData(
             photo_id=photo.id,
@@ -157,17 +154,6 @@ class PhotoService:
             preview_url_expires_at=expires_at,
             created_at=now,
         )
-
-    async def _cleanup_failed_upload(self, keys: tuple[str, str], photo_id: str) -> None:
-        """尽力回收跨存储事务的孤立对象；失败日志只记录内部照片 ID，不记录图片或签名。"""
-
-        for key in keys:
-            try:
-                await self._storage.delete(key)
-            except Exception as exc:
-                logger.bind(fields={"photoId": photo_id, "exceptionType": type(exc).__name__}).warning(
-                    "失败上传的照片对象清理未完成"
-                )
 
     async def delete(self, photo_id: str, user_id: str, session: AsyncSession) -> None:
         """先禁用照片再清理对象，存储暂时失败时保留墓碑，允许同一请求安全重试。"""

@@ -4,12 +4,14 @@ import asyncio
 
 import httpx
 from loguru import logger
+from redis.asyncio import Redis
 
 from huaye_window_ai.core.config import get_settings
 from huaye_window_ai.core.logging import configure_logging
 from huaye_window_ai.db.session import create_engine, create_session_factory
 from huaye_window_ai.integrations.photo_storage import create_photo_storage
 from huaye_window_ai.integrations.seedream import SeedreamProvider
+from huaye_window_ai.services.render_queue import publish_worker_heartbeat, run_render_maintenance
 from huaye_window_ai.services.render_worker import RenderWorker
 
 
@@ -21,11 +23,13 @@ async def main() -> None:
         raise RuntimeError("请配置 RENDER_ENABLED=true 和 ARK_API_KEY 后启动生成 worker")
     engine = create_engine(settings.resolved_database_url)
     storage = create_photo_storage(settings)
+    redis = Redis.from_url(settings.resolved_redis_url, decode_responses=False)
+    factory = create_session_factory(engine)
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(settings.render_provider_timeout_seconds, connect=10)
         ) as http:
-            worker = RenderWorker(settings, create_session_factory(engine), storage, SeedreamProvider(settings, http))
+            worker = RenderWorker(settings, factory, storage, SeedreamProvider(settings, http))
 
             async def consume() -> None:
                 """队列暂时不可用时退避，单个数据库错误不能永久结束整个 worker。"""
@@ -38,9 +42,13 @@ async def main() -> None:
                         await asyncio.sleep(3)
 
             async with asyncio.TaskGroup() as group:
+                # 报活和维护使用独立任务，所有生成槽都在等待模型时仍可工作。
+                group.create_task(publish_worker_heartbeat(redis, settings))
+                group.create_task(run_render_maintenance(factory, settings, storage))
                 for _ in range(settings.render_worker_concurrency):
                     group.create_task(consume())
     finally:
+        await redis.aclose()
         await storage.aclose()
         await engine.dispose()
 
