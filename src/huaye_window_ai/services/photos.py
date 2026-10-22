@@ -23,7 +23,7 @@ from huaye_window_ai.db.photo_models import Photo
 from huaye_window_ai.db.render_models import RenderTask
 from huaye_window_ai.integrations.photo_storage import LocalPhotoStorage, PhotoStorage
 from huaye_window_ai.repositories.photos import PhotoRepository
-from huaye_window_ai.schemas.photos import UploadedPhotoData
+from huaye_window_ai.schemas.photos import AccountPhotoItem, AccountPhotoPage, UploadedPhotoData
 from huaye_window_ai.services.photo_journal import compensate_photo_write, prepare_photo_write
 
 # 只注册 HEIF 解码器，不接受 Pillow 额外支持的 GIF、SVG 或其他文件类型。
@@ -106,6 +106,19 @@ class PhotoService:
     def __init__(self, settings: Settings, storage: PhotoStorage) -> None:
         self._settings = settings
         self._storage = storage
+
+    async def list_uploads(
+        self, user_id: str, cursor: str | None, size: int, session: AsyncSession
+    ) -> AccountPhotoPage:
+        """从持久账户归属找回上传响应丢失或设备索引丢失的照片，读取本身不删除资源。"""
+        rows = await PhotoRepository(session).list_uploads(user_id, cursor, size)
+        return AccountPhotoPage(
+            items=[
+                AccountPhotoItem(photo_id=row.id, created_at=row.created_at, deleted=row.deleted_at is not None)
+                for row in rows[:size]
+            ],
+            next_cursor=rows[size - 1].id if len(rows) > size else None,
+        )
 
     async def upload(self, file: UploadFile, user_id: str, session: AsyncSession) -> UploadedPhotoData:
         """上传仅支持 WINDOW_PREVIEW；用途已由 HTTP 表单枚举约束，文件名不进入对象路径。"""

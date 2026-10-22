@@ -20,6 +20,18 @@ class PhotoRepository:
         self._session.add(photo)
         await self._session.flush()
 
+    async def list_uploads(self, user_id: str, cursor: str | None, size: int) -> list[Photo]:
+        """仅列本人现场上传，额外读一项判断后续页；包含墓碑以便重试存储删除失败。
+
+        不能按 offset 分页或排除删除行，否则一边读取一边清理会跳过记录；生成输入和
+        结果有各自的删除约束，不属于账户上传照片清理范围。
+        """
+        conditions = [Photo.user_id == user_id, Photo.purpose == "WINDOW_PREVIEW"]
+        if cursor is not None:
+            conditions.append(Photo.id > cursor)
+        rows = await self._session.scalars(select(Photo).where(*conditions).order_by(Photo.id).limit(size + 1))
+        return list(rows)
+
     async def get_owned(self, photo_id: str, user_id: str) -> Photo | None:
         """包含墓碑记录，使所有者可以重试删除；所有业务字段只在归属条件满足时读取。"""
 

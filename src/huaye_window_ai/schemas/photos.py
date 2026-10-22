@@ -18,3 +18,22 @@ class UploadedPhotoData(BaseModel):
     created_at: datetime = Field(alias="createdAt")
 
     model_config = {"populate_by_name": True}
+
+
+class AccountPhotoItem(BaseModel):
+    """账户清理用的最小照片信息；不签发预览链接，也不公开存储对象路径。"""
+
+    photo_id: str = Field(alias="photoId")
+    created_at: datetime = Field(alias="createdAt")
+    deleted: bool
+
+    model_config = {"populate_by_name": True}
+
+
+class AccountPhotoPage(BaseModel):
+    """以不可变照片 ID 游标分页，删除当前页不会让后续清理跳过记录。"""
+
+    items: list[AccountPhotoItem]
+    next_cursor: str | None = Field(alias="nextCursor")
+
+    model_config = {"populate_by_name": True}

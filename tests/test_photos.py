@@ -338,3 +338,48 @@ async def test_failed_delete_stays_inactive_and_can_retry(photo_context: PhotoCo
     second = await photo_context.client.delete(path, headers=photo_context.owner_headers)
     assert second.status_code == 200
     assert not list(photo_context.directory.rglob("*.jpg"))
+
+
+async def test_account_photo_listing_recovers_unindexed_uploads_and_is_owner_scoped(
+    photo_context: PhotoContext,
+) -> None:
+    """客户端可丢失上传响应；列表必须从数据库找回，且不能泄露他人照片或生成快照。"""
+    first = (await photo_context.upload()).json()["data"]["photoId"]
+    second = (await photo_context.upload()).json()["data"]["photoId"]
+    await photo_context.upload(headers=photo_context.other_headers)
+    async with photo_context.session_factory() as session:
+        source = await session.get(Photo, first)
+        assert source is not None
+        session.add(
+            Photo(
+                id="photo_internal",
+                user_id="user_owner",
+                purpose="RENDER_INPUT",
+                storage_key="private",
+                thumbnail_key="private-thumb",
+                width=20,
+                height=30,
+                size_bytes=10,
+                mime_type="image/png",
+            )
+        )
+        await session.commit()
+    unauthorized = await photo_context.client.get("/v1/photos")
+    assert unauthorized.status_code == 401
+    response = await photo_context.client.get("/v1/photos?size=1", headers=photo_context.owner_headers)
+    assert response.status_code == 200
+    page = response.json()["data"]
+    assert len(page["items"]) == 1 and page["nextCursor"]
+    # 游标分页不因删除而移动下标，否则清理第一页后会跳过下一张。
+    identifier = page["items"][0]["photoId"]
+    await photo_context.client.delete(f"/v1/photos/{identifier}", headers=photo_context.owner_headers)
+    following = await photo_context.client.get(
+        "/v1/photos", params={"cursor": page["nextCursor"], "size": 1}, headers=photo_context.owner_headers
+    )
+    next_page = following.json()["data"]
+    assert {identifier, next_page["items"][0]["photoId"]} == {first, second}
+    assert next_page["nextCursor"] is None
+    again = (await photo_context.client.get("/v1/photos", headers=photo_context.owner_headers)).json()["data"]
+    assert {item["photoId"] for item in again["items"]} == {first, second}
+    assert any(item["deleted"] for item in again["items"])
+    assert "storageKey" not in str(again) and "previewUrl" not in str(again)

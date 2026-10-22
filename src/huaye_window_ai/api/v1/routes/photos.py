@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from huaye_window_ai.api.dependencies import get_current_user_id
 from huaye_window_ai.core.responses import ApiResponse
 from huaye_window_ai.db.session import get_db_session
-from huaye_window_ai.schemas.photos import UploadedPhotoData
+from huaye_window_ai.schemas.photos import AccountPhotoPage, UploadedPhotoData
 from huaye_window_ai.services.photos import PhotoService
 
 router = APIRouter(prefix="/photos", tags=["照片"])
@@ -20,6 +20,21 @@ def get_photo_service(request: Request) -> PhotoService:
     """使用应用级存储配置，测试可以替换服务而无需连接外部对象存储。"""
 
     return cast(PhotoService, request.app.state.photo_service)
+
+
+@router.get("", response_model=ApiResponse[AccountPhotoPage])
+async def list_photos(
+    request: Request,
+    cursor: str | None = Query(default=None, min_length=1, max_length=41),
+    size: int = Query(default=50, ge=1, le=100),
+    user_id: str = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_db_session),
+    service: PhotoService = Depends(get_photo_service),
+) -> ApiResponse[AccountPhotoPage]:
+    """找回当前账户的上传照片；包含删除墓碑以支持重试，不涉及生成快照或其他用户。"""
+    return ApiResponse(
+        data=await service.list_uploads(user_id, cursor, size, session), request_id=request.state.request_id
+    )
 
 
 @router.post("", response_model=ApiResponse[UploadedPhotoData])
