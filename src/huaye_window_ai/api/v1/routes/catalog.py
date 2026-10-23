@@ -18,6 +18,7 @@ from huaye_window_ai.repositories.catalog import CatalogRepository
 from huaye_window_ai.schemas.catalog import (
     FrameColor,
     GlassOption,
+    HomeDisplayAssets,
     NeedType,
     NormalizedSelection,
     RoomType,
@@ -31,7 +32,7 @@ from huaye_window_ai.schemas.catalog import (
 router = APIRouter(tags=["方案目录"])
 
 
-async def _asset_url(request: Request, path: str) -> str:
+async def _asset_url(request: Request, path: str, *, expires_at: datetime | None = None) -> str:
     """OSS 目录只签发运营配置的 catalog 对象；本地/CDN 模式保留原资源地址。"""
 
     settings = request.app.state.settings
@@ -43,10 +44,29 @@ async def _asset_url(request: Request, path: str) -> str:
         storage = cast(PhotoStorage, request.app.state.photo_storage)
         # 仅目录素材免登录；用户照片不会通过本路由签名，也不能提交任意路径请求签名。
         return await storage.signed_url(
-            key, "", datetime.now(UTC) + timedelta(seconds=settings.photo_preview_ttl_seconds)
+            key, "", expires_at or datetime.now(UTC) + timedelta(seconds=settings.photo_preview_ttl_seconds)
         )
     base_url: str = settings.catalog_public_base_url
     return f"{base_url.rstrip('/')}/{quote(path.lstrip('/'), safe='/')}"
+
+
+@router.get("/display-assets/home", response_model=ApiResponse[HomeDisplayAssets])
+async def get_home_display_assets(
+    request: Request, session: AsyncSession = Depends(get_db_session)
+) -> ApiResponse[HomeDisplayAssets]:
+    """首页、登录和拍摄示意复用公开目录素材；仅签发数据库登记且上架的固定一对图片。"""
+    paths = await CatalogRepository(session).home_display_assets()
+    if set(paths) != {"home-before", "home-after"}:
+        raise AppError("DISPLAY_ASSET_UNAVAILABLE", "首页图片暂不可用，请稍后重试", status_code=503)
+    expires_at = datetime.now(UTC) + timedelta(seconds=request.app.state.settings.photo_preview_ttl_seconds)
+    return ApiResponse(
+        data=HomeDisplayAssets(
+            before_url=await _asset_url(request, paths["home-before"], expires_at=expires_at),
+            after_url=await _asset_url(request, paths["home-after"], expires_at=expires_at),
+            expires_at=expires_at,
+        ),
+        request_id=request.state.request_id,
+    )
 
 
 @router.get("/solutions", response_model=ApiResponse[SolutionPage])

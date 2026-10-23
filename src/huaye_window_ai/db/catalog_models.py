@@ -15,6 +15,16 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+class DisplayAsset(Base):
+    """公开展示素材只保存目录相对路径；签名地址按请求生成，用户照片不能登记在此。"""
+
+    __tablename__ = "display_assets"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    image_path: Mapped[str] = mapped_column(String(256), nullable=False)
+    available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
 class WindowSolution(Base):
     """保存完整方案及有序配置项，避免前端缓存成为可用组合的事实来源。
 

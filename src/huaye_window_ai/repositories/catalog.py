@@ -8,7 +8,7 @@ from importlib.resources import files
 from sqlalchemy import ColumnElement, String, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from huaye_window_ai.db.catalog_models import SampleScene, WindowSolution
+from huaye_window_ai.db.catalog_models import DisplayAsset, SampleScene, WindowSolution
 from huaye_window_ai.schemas.catalog import NeedType, RoomType
 
 
@@ -17,6 +17,15 @@ class CatalogRepository:
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+
+    async def home_display_assets(self) -> dict[str, str]:
+        """固定查询首页前后图，不接受客户端对象路径，避免公开接口变成任意签名服务。"""
+        rows = await self.session.scalars(
+            select(DisplayAsset).where(
+                DisplayAsset.id.in_(("home-before", "home-after")), DisplayAsset.available.is_(True)
+            )
+        )
+        return {row.id: row.image_path for row in rows}
 
     async def list_solutions(
         self,

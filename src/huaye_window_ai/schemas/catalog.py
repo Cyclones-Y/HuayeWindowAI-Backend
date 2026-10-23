@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Self
 
@@ -32,6 +33,14 @@ class FrameColor(CatalogModel):
     label: str
     color_hex: str = Field(alias="colorHex", pattern=r"^#[0-9A-Fa-f]{6}$")
     available: bool
+
+
+class HomeDisplayAssets(CatalogModel):
+    """同一组首页对比图及签名到期时间，供客户端按有效期复用并刷新。"""
+
+    before_url: str = Field(alias="beforeUrl")
+    after_url: str = Field(alias="afterUrl")
+    expires_at: datetime = Field(alias="expiresAt")
 
 
 class GlassOption(CatalogModel):

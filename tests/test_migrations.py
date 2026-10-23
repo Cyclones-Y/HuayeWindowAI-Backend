@@ -6,7 +6,7 @@ import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 
 from alembic import command
 from huaye_window_ai.db.base import Base
@@ -29,6 +29,11 @@ def test_catalog_photo_migration_round_trip_and_model_parity(tmp_path: Path, mon
                 opts={"include_object": lambda obj, name, *args: name != "alembic_version"},
             )
             assert compare_metadata(context, Base.metadata) == []
+            # 首页部署必须同时登记完整对比图；只保存对象路径，不能写入会过期的签名。
+            assert dict(connection.execute(text("SELECT id, image_path FROM display_assets")).all()) == {
+                "home-before": "home-hero-before.jpg",
+                "home-after": "home-hero-mobile.jpg",
+            }
         command.downgrade(config, "20260902_0001")
         assert set(inspect(engine).get_table_names()) == {"users", "wechat_identities", "alembic_version"}
         command.upgrade(config, "head")
